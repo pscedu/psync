@@ -439,51 +439,50 @@ struct filterpattern {
 void
 push_filter(struct psc_dynarray *da, char *s, int type)
 {
+	struct {
+		const char	*name;
+		const char	*abbr;
+		int		 type;
+	} *ty, types[] = {
+		{ "clear",	"!", FPT_CLEAR },
+		{ "dir-merge",	":", FPT_DIRMERGE },
+		{ "exclude",	"-", FPT_EXCL },
+		{ "hide",	"H", FPT_HIDE },
+		{ "include",	"+", FPT_INCL },
+		{ "merge",	".", FPT_MERGE },
+		{ "protect",	"P", FPT_PROTECT },
+		{ "risk",	"R", FPT_RISK },
+		{ "show",	"S", FPT_SHOW }
+	};
 	struct filterpattern *fp;
-	char *ty, *sep;
+	char *sty, *sep;
+	int n;
 
 	fp = PSCALLOC(sizeof(*fp));
 	if (type) {
 		fp->fp_type = type;
 		fp->fp_pat = s;
 	} else {
-		for (ty = s; *s && !isspace(*s); s++)
+		for (sty = s; *s && !isspace(*s); s++)
 			;
 		while (isspace(*s))
 			s++;
 		if (*s == '\0')
-			goto error;
-		sep = strchr(ty, ',');
+			psc_fatal("error");
+		sep = strchr(sty, ',');
 		if (sep)
 			*sep = '\0';
 
-		if (strcmp(ty, "include") == 0 || strcmp(ty, "+"))
-			fp->fp_type = FPT_INCL;
-		else if (strcmp(ty, "exclude") == 0 || strcmp(ty, "-"))
-			fp->fp_type = FPT_EXCL;
-		else if (strcmp(ty, "merge") == 0 || strcmp(ty, "."))
-			fp->fp_type = FPT_MERGE;
-		else if (strcmp(ty, "dir-merge") == 0 || strcmp(ty, ":"))
-			fp->fp_type = FPT_DIRMERGE;
-		else if (strcmp(ty, "hide") == 0 || strcmp(ty, "H"))
-			fp->fp_type = FPT_HIDE;
-		else if (strcmp(ty, "show") == 0 || strcmp(ty, "S"))
-			fp->fp_type = FPT_SHOW;
-		else if (strcmp(ty, "protect") == 0 || strcmp(ty, "P"))
-			fp->fp_type = FPT_PROTECT;
-		else if (strcmp(ty, "risk") == 0 || strcmp(ty, "R"))
-			fp->fp_type = FPT_RISK;
-		else if (strcmp(ty, "clear") == 0 || strcmp(ty, "!"))
-			fp->fp_type = FPT_CLEAR;
-		else
-			goto error;
-
+		for (n = 0, ty = types; n < nitems(types); ty++, n++)
+			if (strcmp(ty->name, sty) == 0 ||
+			    strcmp(ty->abbr, sty) == 0)
+				break;
+		if (n == nitems(types))
+			psc_fatal("error");
+		fp->fp_type = ty->type;
 		fp->fp_pat = s;
 	}
 	push(da, fp);
-	return;
-
- error:
 }
 
 void

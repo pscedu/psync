@@ -20,6 +20,7 @@
 #include <sys/types.h>
 #include <sys/stat.h>
 
+#include <ctype.h>
 #include <err.h>
 #include <errno.h>
 #include <getopt.h>
@@ -30,6 +31,7 @@
 
 #include "pfl/cdefs.h"
 #include "pfl/pfl.h"
+#include "pfl/str.h"
 #include "pfl/types.h"
 #include "pfl/walk.h"
 #include "psc_ds/list.h"
@@ -37,9 +39,17 @@
 #include "psc_util/alloc.h"
 #include "psc_util/crc.h"
 #include "psc_util/log.h"
+#include "psc_util/pool.h"
 #include "psc_util/thread.h"
+#include "psc_util/timerthr.h"
 
-const char *progname;
+enum {
+	THRT_MAIN,
+	THRT_TIOS,
+	THRT_WK
+};
+
+const char		*progname;
 
 const char		*opt_address;
 uint64_t		 opt_block_size;
@@ -134,10 +144,13 @@ int			 opt_update;
 int			 opt_verbose;
 int			 opt_whole_file;
 
-struct psc_dynarray opt_exclude = DYNARRAY_INIT;
-struct psc_dynarray opt_files = DYNARRAY_INIT;
-struct psc_dynarray opt_filter = DYNARRAY_INIT;
-struct psc_dynarray opt_include = DYNARRAY_INIT;
+struct psc_dynarray	 opt_exclude = DYNARRAY_INIT;
+struct psc_dynarray	 opt_files = DYNARRAY_INIT;
+struct psc_dynarray	 opt_filter = DYNARRAY_INIT;
+struct psc_dynarray	 opt_include = DYNARRAY_INIT;
+
+struct psc_poolmaster	 work_poolmaster;
+struct psc_poolmgr	*work_pool;
 
 #define NO_ARG		no_argument
 #define REQARG		required_argument
@@ -372,11 +385,11 @@ walkfile(const char *fn, const struct stat *stb, void *arg)
 #endif
 
 	wk = psc_pool_get(work_pool);
-	wk->wk_cb = i;
+//	wk->wk_cb = i;
 	strlcpy(wk->wk_srcfn, fn, sizeof(wk->wk_srcfn));
 	strlcpy(wk->wk_dstfn, fn, sizeof(wk->wk_dstfn));
-	memcpy(&wk->wk_stb, stb, sizeof(*wk->wk_stb));
-	lc_addwait(&workq, wk);
+	memcpy(&wk->wk_stb, stb, sizeof(wk->wk_stb));
+	lc_add(&workq, wk);
 	return (rc);
 }
 
@@ -387,8 +400,8 @@ walkfile(const char *fn, const struct stat *stb, void *arg)
 	} while (0)
 
 void
-pushfile(struct psc_dynarray *da, const char *fn,
-    void (*f)(struct psc_dynarray *, const char *, int), int arg)
+pushfile(struct psc_dynarray *da, char *fn,
+    void (*f)(struct psc_dynarray *, char *, int), int arg)
 {
 	char *p, buf[BUFSIZ];
 	FILE *fp;
@@ -434,7 +447,7 @@ push_filter(struct psc_dynarray *da, char *s, int type)
 		fp->fp_type = type;
 		fp->fp_pat = s;
 	} else {
-		for (ty = s; *s && !iswhite(*s); s++)
+		for (ty = s; *s && !isspace(*s); s++)
 			;
 		while (isspace(*s))
 			s++;
@@ -474,7 +487,7 @@ push_filter(struct psc_dynarray *da, char *s, int type)
 }
 
 void
-push_files_from(struct psc_dynarray *da, const char *fn,
+push_files_from(struct psc_dynarray *da, char *fn,
     __unusedx int arg)
 {
 	psc_dynarray_add(da, fn);
@@ -488,6 +501,7 @@ main(int argc, char *argv[])
 	struct psc_thread *thr;
 	char *fn;
 
+	pfl_init();
 	progname = argv[0];
 	while ((c = getopt_long(argc, argv,
 	    "0468aB:bCcdEEe:f:gHhIiKkLlmN:nOoPpqRrST:tuVvWxyz", opts,
@@ -515,7 +529,8 @@ main(int argc, char *argv[])
 		case 'd':		opt_dirs = 1;			break;
 		case 'E':		opt_extended_attributes = 1;	break;
 		case 'e':		opt_rsh = optarg;		break;
-		case 'f':		pushfilter(&opt_filter, optarg);break;
+		case 'f':
+			push_filter(&opt_filter, optarg, FPT_INCL);	break;
 		case 'g':		opt_group = 1;			break;
 		case 'H':		opt_hard_links = 1;		break;
 		case 'h':		opt_human_readable = 1;		break;
@@ -564,16 +579,19 @@ main(int argc, char *argv[])
 				err(1, "--compress-level=%s", optarg);
 			break;
 		case OPT_COPY_DEST:	opt_copy_dest = optarg;		break;
-		case OPT_EXCLUDE:	push_filter(&opt_filter,
-					    optarg);			break;
-		case OPT_EXCLUDE_FROM:	pushfile(&opt_filter, optarg,
-					    push_filter);		break;
-		case OPT_FILES_FROM:	pushfile(&opt_files, optarg,
-					    push_files_from);		break;
-		case OPT_INCLUDE:	push_filter(&opt_filter, optarg);
-									break;
-		case OPT_INCLUDE_FROM:	pushfile(&opt_filter, optarg,
-					    push_filter);		break;
+		case OPT_EXCLUDE:
+			push_filter(&opt_filter, optarg, FPT_EXCL);	break;
+		case OPT_EXCLUDE_FROM:
+			pushfile(&opt_filter, optarg, push_filter,
+			    FPT_EXCL);					break;
+		case OPT_FILES_FROM:
+			pushfile(&opt_files, optarg, push_files_from,
+			    FPT_INCL);					break;
+		case OPT_INCLUDE:
+			push_filter(&opt_filter, optarg, FPT_INCL);	break;
+		case OPT_INCLUDE_FROM:
+			pushfile(&opt_filter, optarg, push_filter,
+			    FPT_INCL);					break;
 		case OPT_LINK_DEST:	opt_link_dest = optarg;		break;
 		case OPT_LOG_FILE:	opt_log_file = optarg;		break;
 		case OPT_LOG_FILE_FORMAT:
@@ -621,21 +639,23 @@ main(int argc, char *argv[])
 	    (argc == 1 && psc_dynarray_len(&opt_files) == 0))
 		usage();
 
-	pfl_iostat_thr_spawn();
+	pscthr_init(THRT_MAIN, 0, NULL, NULL, 0, "main");
+	psc_tiosthr_spawn(THRT_TIOS, "tios");
 
 	lc_reginit(&workq, struct work, wk_lentry, "workq");
 
 	fn = strchr(argv[0], ':');
-	if (opt_sink || p) {
+	if (opt_sink || fn) {
 
 	} else {
 		argc--;
 		fn = strchr(argv[argc], ':');
-		if (p == NULL)
+		if (fn == NULL)
 			usage();
 
 		for (i = 0; i < opt_nthreads; i++) {
-			thr = pscthr_init(worker_main);
+			thr = pscthr_init(THRT_WK, 0, worker_main, NULL,
+			    0, "wk%d", i);
 			psc_dynarray_add(&threads, thr);
 		}
 		flags = 0;

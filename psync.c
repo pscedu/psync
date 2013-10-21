@@ -36,12 +36,12 @@
 #include "pfl/walk.h"
 #include "pfl/list.h"
 #include "pfl/listcache.h"
-#include "psc_util/alloc.h"
-#include "psc_util/crc.h"
-#include "psc_util/log.h"
-#include "psc_util/pool.h"
-#include "psc_util/thread.h"
-#include "psc_util/timerthr.h"
+#include "pfl/alloc.h"
+#include "pfl/crc.h"
+#include "pfl/log.h"
+#include "pfl/pool.h"
+#include "pfl/thread.h"
+#include "pfl/timerthr.h"
 
 enum {
 	THRT_MAIN,

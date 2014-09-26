@@ -29,19 +29,19 @@
 #include <string.h>
 #include <unistd.h>
 
+#include "pfl/alloc.h"
 #include "pfl/cdefs.h"
-#include "pfl/pfl.h"
-#include "pfl/str.h"
-#include "pfl/types.h"
-#include "pfl/walk.h"
+#include "pfl/crc.h"
 #include "pfl/list.h"
 #include "pfl/listcache.h"
-#include "pfl/alloc.h"
-#include "pfl/crc.h"
 #include "pfl/log.h"
+#include "pfl/pfl.h"
 #include "pfl/pool.h"
+#include "pfl/str.h"
 #include "pfl/thread.h"
 #include "pfl/timerthr.h"
+#include "pfl/types.h"
+#include "pfl/walk.h"
 
 enum {
 	THRT_MAIN,
@@ -66,7 +66,7 @@ int			 opt_modify_window;
 const char		*opt_out_format;
 const char		*opt_partial_dir;
 const char		*opt_password_file;
-const char		*opt_psync_path;
+const char		*opt_psync_path = "psync";
 const char		*opt_read_batch;
 const char		*opt_rsh = "ssh";
 const char		*opt_sockopts;
@@ -132,11 +132,12 @@ int			 opt_relative;
 int			 opt_remove_source_file;
 int			 opt_remove_source_files;
 int			 opt_safe_links;
-int			 opt_sink;
+int			 opt_puppet;
 int			 opt_size_only;
 int			 opt_sparse;
 int			 opt_specials;
 int			 opt_stats;
+int			 opt_streams;
 int			 opt_super;
 int			 opt_timeout;		/* in seconds */
 int			 opt_times;
@@ -189,6 +190,8 @@ enum {
 
 struct option opts[] = {
 	{ "8-bit-output",	NO_ARG,	NULL,			'8' },
+	{ "PUPPET",		NO_ARG,	&opt_puppet,		0x1 },
+	{ "PUPPETMASTER",	REQARG,	&opt_puppetmaster,	0x1 },
 	{ "address",		REQARG,	NULL,			OPT_ADDRESS },
 	{ "append",		NO_ARG,	&opt_append,		0x1 },
 	{ "archive",		NO_ARG,	NULL,			'a' },
@@ -251,6 +254,7 @@ struct option opts[] = {
 	{ "min-size",		REQARG,	NULL,			OPT_MIN_SIZE },
 	{ "modify-window",	REQARG,	NULL,			OPT_MODIFY_WINDOW },
 	{ "no-implied-dirs",	NO_ARG,	&opt_no_implied_dirs,	0x1 },
+	{ "nstreams",		REQARG,	&opt_nstreams,		'N' },
 	{ "numeric-ids",	NO_ARG,	&opt_numeric_ids,	0x1 },
 	{ "omit-dir-times",	NO_ARG,	NULL,			'O' },
 	{ "one-file-system",	NO_ARG,	NULL,			'x' },
@@ -272,12 +276,12 @@ struct option opts[] = {
 	{ "remove-source-files",NO_ARG,	&opt_remove_source_files,0x1 },
 	{ "rsh",		REQARG,	NULL,			'e' },
 	{ "safe-links",		NO_ARG,	&opt_safe_links,	0x1 },
-	{ "SINK",		NO_ARG,	&opt_sink,		0x1 },
 	{ "size-only",		NO_ARG,	&opt_size_only,		0x1 },
 	{ "sockopts",		REQARG,	NULL,			OPT_SOCKOPTS },
 	{ "sparse",		NO_ARG,	NULL,			'S' },
 	{ "specials",		NO_ARG,	&opt_specials,		0x1 },
 	{ "stats",		NO_ARG,	&opt_stats,		0x1 },
+	{ "streams",		REQARG,	&opt_streams,		0x1 },
 	{ "suffix",		REQARG,	NULL,			OPT_SUFFIX },
 	{ "super",		NO_ARG,	&opt_super,		0x1 },
 	{ "temp-dir",		REQARG,	NULL,			'T' },
@@ -294,17 +298,28 @@ struct option opts[] = {
 struct work {
 	struct psc_listentry	  wk_lentry;
 	char			  wk_fn[PATH_MAX];
+	char			  wk_host[HOST_NAME_MAX + 1];
+	int			  wk_flags;
 	struct stat		  wk_stb;
 	void			(*wk_cb)(struct work *);
 };
 
+#define WKF_RECURSE		(1 << 0)
+#define WKF_PUT			(1 << 1)
+
+#define WK_ISPUT(wk)		((wk)->wk_flags & WKF_PUT)
+#define WK_ISGET(wk)		(!WK_ISPUT(wk))
+
 struct psc_listcache workq;
 
-__dead void
-usage(void)
+void
+region_is_zero()
+
+void
+proc_work(struct work *wk)
 {
-	fprintf(stderr, "usage: %s [-Pqvx]\n", progname);
-	exit(1);
+	if (opt_sparse && region_is_zero())
+		continue;
 }
 
 void
@@ -364,11 +379,68 @@ parsesize(uint64_t *p, const char *s, uint64_t base)
 	return (1);
 }
 
-int
-walkfile(const char *fn, const struct stat *stb, void *arg)
+void
+send_getfile(const char *host, const char *srcfn, const char *dstfn)
 {
+	struct rpc_getfile_req rq;
+	struct stream *st;
+
+	memset(&rq, 0, sizeof(rq));
+
+	rq.
+
+	st = stream_get();
+	stream_send(st, OPC_GETFILE, &rq, sizeof(rq));
+	stream_release(st);
+}
+
+void
+enqueue(const char *srchost, const char *srcfn, const char *dsthost,
+    const char *dstfn)
+{
+	/* fetching */
+	if (srchost) {
+		send_get(srchost, srcfn, dstfn);
+		return;
+	}
+
+	/* sending */
+
+	/* if fetching,  */
+	if (dsthost == NULL)
+		goto fill;
+	for (off = 0; off < stb->st_size; off += blksz) {
+ fill:
+		wk = psc_pool_get(work_pool);
+		memset(wk, 0, sizeof(*wk));
+		INIT_LISTENTRY(&wk->lentry);
+
+		strlcpy(wk->wk_host, srchost ? srchost : dsthost,
+		    sizeof(wk->wk_host));
+		strlcpy(wk->wk_fn, srchost ? srcfn : dstfn,
+		    sizeof(wk->wk_fn));
+
+		memcpy(&wk->wk_stb, stb, sizeof(wk->wk_stb));
+		if (opt_recursive)
+			wk->wk_flags = WKF_RECURSE;
+		if (dsthost)
+			wk->wk_flags = WKF_PUT;
+		wk->wk_off = off;
+		wk->wk_cb = proc_work;
+		lc_add(&workq, wk);
+
+		if (dsthost == NULL)
+			break;
+	}
+}
+
+int
+walk_cb(const char *fn, const struct stat *stb, void *arg)
+{
+	char *dstfn = arg;
 	struct work *wk;
 	int j, rc = 0;
+	off_t off;
 
 #if 0
 	struct filterpat *fp;
@@ -384,20 +456,28 @@ walkfile(const char *fn, const struct stat *stb, void *arg)
 	}
 #endif
 
-	wk = psc_pool_get(work_pool);
-//	wk->wk_cb = i;
-	strlcpy(wk->wk_srcfn, fn, sizeof(wk->wk_srcfn));
-	strlcpy(wk->wk_dstfn, fn, sizeof(wk->wk_dstfn));
-	memcpy(&wk->wk_stb, stb, sizeof(wk->wk_stb));
-	lc_add(&workq, wk);
+	enqueue(dstfn);
+
 	return (rc);
 }
 
-#define push(da, ent)							\
-	do {								\
-		if (psc_dynarray_add((da), (ent)))			\
-			err(1, NULL);					\
-	} while (0)
+
+int
+walkfiles(const char *srcfn, int flags, const char *dstfn)
+{
+	/*
+	 * psync a ... b
+	 * psync nonexist ... b
+	 * psync loc rem:fn
+	 * psync nonexist ... rem:fn
+	 * psync rem:fn ... loc
+	 * psync rem1:fn ... rem2:fn2
+	 */
+	if (strchr(srcfn, ':') && stat(srcfn) == 0) {
+	} else {
+		pfl_walkfiles(fn, flags, walk_cb, dst);
+	}
+}
 
 void
 pushfile(struct psc_dynarray *da, char *fn,
@@ -489,7 +569,96 @@ void
 push_files_from(struct psc_dynarray *da, char *fn,
     __unusedx int arg)
 {
-	psc_dynarray_add(da, fn);
+	push(da, fn);
+}
+
+void
+fromfile(const char *fn, int flags, const char *dst)
+{
+	char fn[PATH_MAX], *p = fn;
+	int rc = 0, rv, lineno = 1;
+	FILE *fp;
+
+	fp = fopen(fn, "r");
+	if (fp == NULL)
+		err(1, "open %s", fn);
+	for (;;) {
+		c = fgetc(fp);
+		if (c == EOF)
+			break;
+		if (c == '\n' || c == '\r') {
+			lineno++;
+			*p = '\0';
+			if (p != fn) {
+				rv = walkfiles(fn, flags, dst);
+				if (rv)
+					rc = rv;
+			}
+			p = fn;
+		} else {
+			if (p == fn + sizeof(fn) - 1) {
+				errno = ENAMETOOLONG;
+				warn("%s:%d", fn, lineno);
+			} else
+				*p++ = c;
+		}
+	}
+	fclose(fp);
+	if (p != fn) {
+		*p = '\0';
+		rv = walkfiles(fn, flags, dst);
+		if (rv)
+			rc = rv;
+	}
+	return (rc);
+}
+
+int
+stream_open(struct stream *st, const char *fmt, ...)
+{
+	int rc, rfds[2], wfds[2];
+	char *cmd, **cmdv;
+	va_list ap;
+
+	rc = socketpair(AF_LOCAL, SOCK_STREAM, PF_UNSPEC, rfds);
+	if (rc == -1)
+		err(1, "socketpair");
+
+	rc = socketpair(AF_LOCAL, SOCK_STREAM, PF_UNSPEC, wfds);
+	if (rc == -1)
+		err(1, "socketpair");
+
+	rc = fork();
+	switch (rc) {
+	case -1:
+		err(1, "fork");
+		break;
+	case 0:
+		va_start(ap, fmt);
+		vasprintf(&cmd, fmt, ap);
+		va_end(ap);
+
+		cmdv = str_split(cmd);
+
+		if (dup2(rfds[1], 0) == -1)
+			err(1, "dup2");
+		if (dup2(wfds[1], 1) == -1)
+			err(1, "dup2");
+		execvp(cmdv[0], cmdv);
+		err(1, "exec %s", cmd);
+		break;
+	default:
+		st->rfd = rfds[0];
+		st->wfd = wfds[0];
+		break;
+	}
+}
+
+__dead void
+usage(void)
+{
+	fprintf(stderr, "usage: %s src dst\n", progname);
+	exit(1);
 }
 
 int
@@ -498,7 +667,7 @@ main(int argc, char *argv[])
 	int flags, i, rv, rc = 0, c;
 	struct psc_dynarray threads = DYNARRAY_INIT;
 	struct psc_thread *thr;
-	char *fn;
+	char *fn, *dst;
 
 	pfl_init();
 	progname = argv[0];
@@ -541,7 +710,7 @@ main(int argc, char *argv[])
 		case 'l':		opt_links = 1;			break;
 		case 'm':		opt_prune_empty_dirs = 1;	break;
 		case 'N':
-			if (!parsenum(&opt_nthreads, optarg, 0, 100))
+			if (!parsenum(&opt_nstreams, optarg, 0, 64))
 				err(1, "-n %s", optarg);
 			break;
 		case 'n':		opt_dry_run = 1;		break;
@@ -558,7 +727,7 @@ main(int argc, char *argv[])
 		case 't':		opt_times = 1;			break;
 		case 'u':		opt_update = 1;			break;
 		case 'V':
-			fprintf(stderr, "psync version %d\n", VERSION);
+			fprintf(stderr, "psync version 1.0\n");
 			exit(0);
 			break;
 		case 'v':		opt_verbose = 1;		break;
@@ -639,47 +808,57 @@ main(int argc, char *argv[])
 		usage();
 
 	pscthr_init(THRT_MAIN, 0, NULL, NULL, 0, "main");
+
+	if (opt_puppet || opt_puppetmaster)
+		exit(puppet_mode(opt_puppetmaster));
+
 	psc_tiosthr_spawn(THRT_TIOS, "tios");
 
 	lc_reginit(&workq, struct work, wk_lentry, "workq");
 
-	fn = strchr(argv[0], ':');
-	if (opt_sink || fn) {
+	for (i = 0; i < opt_nstreams; i++) {
+		struct stream st;
+		struct wkthr *wt;
 
-	} else {
-		argc--;
-		fn = strchr(argv[argc], ':');
-		if (fn == NULL)
-			usage();
+		if (id) {
+			stream_open(&st, "%s %s --PUPPETMASTER=%d",
+			    opt_rsh, opt_psync_path, id);
+		} else {
+			stream_open(&st, "%s %s --PUPPET --streams=%d",
+			    opt_rsh, opt_psync_path, opt_streams);
+			id = ;
+		}
 
-		for (i = 0; i < opt_nthreads; i++) {
-			thr = pscthr_init(THRT_WK, 0, worker_main, NULL,
-			    0, "wk%d", i);
-			psc_dynarray_add(&threads, thr);
-		}
-		flags = 0;
-		if (opt_recursive)
-			flags |= PFL_FILEWALKF_RECURSIVE;
-		if (opt_verbose)
-			flags |= PFL_FILEWALKF_VERBOSE;
-		for (i = 0; i < argc; i++) {
-			rv = pfl_filewalk(argv[i], flags, walkfile,
-			    argv[argc]);
-			if (rv)
-				rc = rv;
-		}
-		DYNARRAY_FOREACH(fn, i, &opt_files) {
-			rv = pfl_filewalk(fn, flags, walkfile,
-			    argv[argc]);
-			if (rv)
-				rc = rv;
-		}
-		lc_kill(&workq);
-		DYNARRAY_FOREACH(thr, i, &threads) {
-			rv = pthread_join(thr->pscthr_pthread, NULL);
-			if (rv)
-				rc = rv;
-		}
+
+		thr = pscthr_init(THRT_WK, 0, worker_main, NULL,
+		    sizeof(*wt), "wk%d", i);
+		wt = thr->pscthr_private;
+		wt->stream = st;
+		push(&threads, thr);
+	}
+
+	flags = 0;
+	if (opt_recursive)
+		flags |= PFL_FILEWALKF_RECURSIVE;
+	if (opt_verbose)
+		flags |= PFL_FILEWALKF_VERBOSE;
+
+	dst = argv[--argc];
+	for (i = 0; i < argc; i++) {
+		rv = walkfiles(argv[i], flags, dst);
+		if (rv)
+			rc = rv;
+	}
+	DYNARRAY_FOREACH(fn, i, &opt_files) {
+		rv = fromfile(fn, flags, dst);
+		if (rv)
+			rc = rv;
+	}
+	lc_kill(&workq);
+	DYNARRAY_FOREACH(thr, i, &threads) {
+		rv = pthread_join(thr->pscthr_pthread, NULL);
+		if (rv)
+			rc = rv;
 	}
 	exit(rc);
 }

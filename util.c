@@ -1,4 +1,5 @@
 /* $Id$ */
+/* %PSC_COPYRIGHT% */
 
 #include <ctype.h>
 #include <stdlib.h>
@@ -50,4 +51,47 @@ str_split(char *s)
 	v = PSCALLOC(len + sizeof(*v));
 	memcpy(v, psc_dynarray_get(&a), len);
 	return (v);
+}
+
+int
+parsenum(int *p, const char *s, int min, int max)
+{
+	char *endp;
+	long l;
+
+	l = strtol(s, &endp, 0);
+	if (l < min || l > max) {
+		errno = ERANGE;
+		return (0);
+	}
+	if (endp == s || *endp) {
+		errno = EINVAL;
+		return (0);
+	}
+	*p = l;
+	return (1);
+}
+
+int
+parsesize(uint64_t *p, const char *s, uint64_t base)
+{
+	const char *bases = "bkmgtpe";
+	char *endp, *b;
+	uint64_t l;
+
+	l = strtoull(s, &endp, 0);
+	if (endp == s) {
+		errno = EINVAL;
+		return (0);
+	}
+	if (*endp) {
+		b = strchr(bases, *endp);
+		if (b == NULL || endp[1]) {
+			errno = EINVAL;
+			return (0);
+		}
+		base = UINT64_C(1) << (10 * (b - bases));
+	}
+	*p = l * base;
+	return (1);
 }

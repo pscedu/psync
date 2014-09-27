@@ -26,5 +26,6 @@ struct wkthr {
 #define atomic_read(fd, buf, len)	atomicio(IOP_READ, (fd), (buf), (len))
 #define atomic_write(fd, buf, len)	atomicio(IOP_WRITE, (fd), (buf), (len))
 
+#define PSYNC_VERSION "1.0"
 
 #endif /* _PSYNC_H_ */

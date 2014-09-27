@@ -17,147 +17,49 @@ size_t			 psync_bufsz;
 void			*psync_buf;
 char			 objns[PATH_MAX];
 int			 objns_depth = 2;
-struct psc_hashtbl	 fcache;
 
 volatile sig_atomic_t	 exit_from_signal;
 
-struct file {
-	struct psc_hashent      hentry;
-	uint64_t		fid;
-	int			fd;
-
-};
-
-char objns_tab[] = "0123456789abcdef";
-
 void
-objns_makepath(char *fn, uint64_t fid)
+rpc_send_getfile(const char *host, const char *srcfn, const char *dstfn)
 {
-	char *p;
-	int i;
+	struct rpc_getfile_req rq;
+	struct stream *st;
 
-	i = snprintf(fn, PATH_MAX, "%s/", objns);
-	/*
-	 * ensure name fits into:
-	 * <objns_dir>/abc/abcd0123abcd0123
-	 * length + 1 + depth + 1 + 16
-	 */
-	if (i == -1 || i >= PATH_MAX - (objns_depth + 2 + 16))
-		err(1, "snprintf");
-	p = fn + i;
+	memset(&rq, 0, sizeof(rq));
 
-	/* create a path */
-	for (i = 0; i < objns_depth; i++)
-		*p++ = objns_tab[(fid >> (4 * (i + 2))) & 0xf];
-	*p++ = '/';
-	*p = '\0';
+	xm_insert(xid, dstfn);
 
-	if (mkdir(fn) == -1 && errno != EEXIST)
-		err(1, "mkdir %s", fn);
+	rq.
 
-	snprintf(p, PATH_MAX - (p - fn), "%016"PRIx64, fid);
-}
-
-int
-fcache_search(uint64_t fid)
-{
-	struct psc_hashbkt *b;
-	struct file *f;
-
-	f = pfl_hashtbl_search(&fcache, NULL, NULL, &fid);
-	if (f)
-		return (f->fd);
-
-	b = pfl_hashbkt_get(&fcache, &fid);
-	psc_hashbkt_lock(b);
-	f = psc_hashbkt_search(&fcache, b, NULL, NULL, &fid);
-	if (f == NULL) {
-		char fn[PATH_MAX];
-
-		f = PSCALLOC(sizeof(*f));
-		psc_hashent_init(&fcache, f);
-		f->fid = fid;
-
-		objns_makepath(fn, fid);
-		f->fd = open(fn, O_RDWR | O_CREAT | O_EXCL, 0600);
-		if (f->fd == -1)
-			err(1, "%s", fn);
-
-		psc_hashbkt_add_item(&fcache, b, f);
-
-	}
-	psc_hashbkt_unlock(b);
-	return (f->fd);
-}
-
-void
-fcache_close(uint64_t fid)
-{
-	struct file *f;
-
-	f = psc_hashtbl_searchdel(&fcache, NULL, &fid);
-	if (f) {
-		close(f->fd);
-		PSCFREE(f);
-	}
-}
-
-int
-fcache_init(void)
-{
-	/*
-	 * To saturate a 100Gb/sec pipe with 4k files, we need
-	 * to send about 3 million in parallel...
-	 */
-	psc_hashtbl_init(&fbtbl, 0, struct file, fid, hentry,
-	    29989, NULL, "fcache");
-}
-
-int
-objns_rm_cb(const char *fn, __unusedx const struct pfl_stat *stb,
-    int ftyp, __unusedx int level, __unusedx void *arg)
-{
-	switch (ftyp) {
-	case PFWT_D:
-		break;
-	case PFWT_DP:
-		if (rmdir(fn) == -1)
-			warn("rmdir %s", fn);
-		break;
-	case PFWT_F:
-		if (unlink(fn) == -1)
-			warn("unlink %s", fn);
-		break;
-	}
-	return (0);
-}
-
-void
-fcache_closeall(void)
-{
-	struct psc_hashbkt *b;
-	struct file *f, *fn;
-
-	PSC_HASHTBL_FOREACH_BUCKET(b, &fcache)
-		PSC_HASHBKT_FOREACH_ENTRY_SAFE(&fcache, f, fn, b) {
-			close(f->fd);
-			psc_hashbkt_del_item(&fcache, b, f);
-			PSCFREE(f);
-		}
-
-	/* unlink object namespace */
-	pfl_walkfiles(objns, PFL_FILEWALKF_RECURSIVE, objns_rm_cb, NULL);
+	st = stream_get();
+	stream_send(st, OPC_GETFILE, &rq, sizeof(rq));
+	stream_release(st);
 }
 
 int
 getfile_cb(const char *fn, const struct stat *stb, void *arg)
 {
-	static struct rpc_pushname *m;
+	static struct rpc_putname *m;
 	static size_t len;
+
+#if 0
+	struct filterpat *fp;
+
+	ok = 1;
+	DYNARRAY_FOREACH(fp, j, &opt_filter) {
+		if ()
+			ok = ;
+	}
+	if (!ok) {
+		fts_prune;
+		return;
+	}
+#endif
 
 	m;
 
-	stream_send(stream, OPC_PUSHNAME, &m, sizeof(m));
+	stream_send(stream, OPC_PUTNAME, &m, sizeof(m));
 }
 
 #define LASTFIELDLEN(h, type) ((h)->msglen - sizeof(type))
@@ -229,10 +131,10 @@ rpc_handle_checkzero(struct hdr *h, void *buf)
 }
 
 void
-rpc_handle_getcrc(struct hdr *h, void *buf)
+rpc_handle_getcksum(struct hdr *h, void *buf)
 {
-	struct rpc_getcrc_req *cq = buf;
-	struct rpc_getcrc_rep *cp;
+	struct rpc_getcksum_req *cq = buf;
+	struct rpc_getcksum_rep *cp;
 	gcry_md_hd_t hd;
 	int fd;
 
@@ -253,24 +155,145 @@ rpc_handle_getcrc(struct hdr *h, void *buf)
 	gcry_md_close(hd);
 }
 
-void
-objns_create(void)
+/*
+ * Apply substitution on filename received.
+ */
+const char *
+userfn_subst(uint64_t xid, const char *fn);
 {
-	char fn[PATH_MAX];
+	struct xid_mapping *xm;
 
-	snprintf(objns, sizeof(objns), ".psync.%d",
-	    psc_random32u(1000000));
-	if (mkdir(objns, 0700) == -1)
-		err(1, "mkdir %s", objns);
+	/* if there is a direct substitution for this xid, use it */
+	xm = pfl_hashtbl_search(&xmcache, NULL, NULL, &xid);
+	if (xm)
+		return (xm->fn);
+
+	return (fn);
 }
 
 void
 rpc_handle_putname(struct hdr *h, void *buf)
 {
+	char *ufn, objfn[PATH_MAX];
 	struct rpc_putname *pn = buf;
+	struct timespec ts[2];
+	struct timeval tv[2];
+	int fd = -1;
 
-	fd = fcache_search(cq->fid);
-	if (fd) {
+	/* apply incoming name substitutions */
+	ufn = userfn_subst(h->xid, pn->fn);
+
+	if (S_ISCHR(pn->stb.st_mode) ||
+	    S_ISBLK(pn->stb.st_mode)) {
+		if (mknod(ufn, pn->stb.st_mode,
+		    pn->stb.st_rdev) == -1) {
+			psclog_warn("mknod %s", ufn);
+			return;
+		}
+	} else if (S_ISDIR(pn->stb.st_mode)) {
+		if (mkdir(ufn, pn->stb.st_mode) == -1) {
+			psclog_warn("mkdir %s", ufn);
+			return;
+		}
+	} else if (S_ISFIFO(pn->stb.st_mode)) {
+		if (mkfifo(ufn, pn->stb.st_mode) == -1) {
+			psclog_warn("mkfifo %s", ufn);
+			return;
+		}
+	} else if (S_ISLNK(pn->stb.st_mode)) {
+		if (symlink(objfn, ufn) == -1) {
+			psclog_warn("symlink %s", ufn);
+			return;
+		}
+	} else if (S_ISSOCK(pn->stb.st_mode)) {
+		struct sockaddr_un sun;
+
+		fd = socket(AF_LOCAL, SOCK_STREAM, PF_UNSPEC);
+		if (fd == -1) {
+			psclog_warn("socket %s", ufn);
+			return;
+		}
+		memset(sun, 0, sizeof(sun));
+		sun.sun_family = AF_LOCAL;
+		strlcpy(sun.sun_path, ufn, sizeof(sun.sun_path));
+		SOCKADDR_SETLEN(&sun);
+		if (bind(fd, (struct sockaddr *)&sun,
+		    sizeof(sun)) == -1) {
+			close(fd);
+			psclog_warn("bind %s", ufn);
+			return;
+		}
+		close(fd);
+		fd = -1;
+	} else if (S_ISREG(pn->stb.st_mode)) {
+		objns_makepath(objfn, pn->fid);
+		fd = open(objfn, O_CREAT | O_RDWR, 0600);
+		if (fd == -1) {
+			psclog_warn("open %s", ufn);
+			return;
+		}
+		if (link(objfn, ufn) == -1) {
+			psclog_warn("chown %s", ufn);
+			return;
+		}
+		if (ftruncate(fd) == -1)
+			psclog_warn("chown %s", ufn);
+
+		fcache_insert(pn->fid, fd);
+	}
+
+#ifdef HAVE_FUTIMENS
+	(void)tv;
+	ts[0].tv_sec = pn->stb.atim.tv_sec;
+	ts[0].tv_nsec = pn->st.atim.tv_nsec;
+
+	ts[1].tv_sec = pn->st.mtim.tv_nsec;
+	ts[1].tv_nsec = pn->st.mtim.tv_nsec;
+#else
+	(void)ts;
+	tv[0].tv_sec = pn->stb.atim.tv_sec;
+	tv[0].tv_usec = pn->stb.atim.tv_nsec / 1000;
+
+	tv[1].tv_sec = pn->stb.atim.tv_sec;
+	tv[1].tv_usec = pn->stb.atim.tv_nsec / 1000;
+#endif
+
+	/* BSD file flags */
+	/* MacOS setattrlist */
+	/* linux file attributes: FS_IOC_GETFLAGS */
+	/* extattr */
+
+	if (fd == -1) {
+		if (lchown(ufn, stb.uid, stb.gid) == -1)
+			psclog_warn("chown %s", ufn);
+		if (lchmod(ufn, stb.mode) == -1)
+			psclog_warn("chmod %s", ufn);
+
+#ifdef HAVE_FUTIMENS
+		if (lutimens(ufn, ts) == -1)
+			psclog_warn("utimens %s", ufn);
+#else
+		if (lutimes(ufn, tv) == -1)
+			psclog_warn("utimes", ufn);
+#endif
+
+	} else {
+		if (fchown(fd, stb.uid, stb.gid) == -1)
+			psclog_warn("chown %s", ufn);
+		if (fchmod(fd, stb.mode) == -1)
+			psclog_warn("chmod %s", ufn);
+
+#ifdef HAVE_FUTIMENS
+		struct timespec ts[2];
+
+		if (futimens(fd, ts) == -1)
+			psclog_warn("utimens %s", ufn);
+#else
+		struct timeval tv[2];
+
+		if (futimes(fd, tv) == -1)
+			psclog_warn("utimes", ufn);
+#endif
 	}
 }
 
@@ -292,7 +315,7 @@ op_handler_t ops[] = {
 	rpc_handle_getfile,
 	rpc_handle_putdata,
 	rpc_handle_checkzero,
-	rpc_handle_getcrc,
+	rpc_handle_getcksum,
 	rpc_handle_putname,
 	rpc_handle_ctl
 };
@@ -303,24 +326,17 @@ handle_signal(__unusedx int sig)
 	exit_from_signal = 1;
 }
 
-int
-puppet_mode(int id)
+void
+recvthr_main(struct psc_thread *thr)
 {
 	uint32_t bufsz = 0;
 	ssize_t rc;
-	void *buf;
-	int rfd
 
-	stream.rfd = rfd = STDIN_FILENO;
-	stream.wfd = STDOUT_FILENO;
+	while (pscthr_run(thr)) {
+		rc = atomic_read(rfd, &hdr, sizeof(hdr));
+		if (rc == 0)
+			break;
 
-	signal(SIGINT, handle_signal);
-	signal(SIGPIPE, handle_signal);
-
-	fcache_init();
-	objns_create();
-
-	while (atomic_read(rfd, &hdr, sizeof(hdr))) {
 		if (hdr.msglen > bufsz) {
 			if (hdr.msglen > MAX_BUFSZ)
 				errx(1, "invalid bufsz received from "
@@ -343,6 +359,4 @@ puppet_mode(int id)
 		if (exit_from_signal)
 			break;
 	}
-	fcache_closeall();
-	return (0);
 }

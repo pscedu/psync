@@ -12,9 +12,9 @@ struct hdr {
 
 #define OPC_GETFILE		0
 #define OPC_PUTDATA		1
-#define OPC_EXAMINE		2
 #define OPC_CHECKZERO		2
-#define OPC_MAPNAME		3
+#define OPC_GETCKSUM		2
+#define OPC_PUTNAME		3
 #define OPC_CTL			4
 
 struct rpc_sub_stat {
@@ -27,8 +27,6 @@ struct rpc_sub_stat {
 	uint64_t		size;
 	struct pfl_timespec	atim;	/* access time */
 	struct pfl_timespec	mtim;	/* modify (data) time */
-	struct pfl_timespec	ctim;	/* change (metadata) time */
-	struct pfl_timespec	btim;	/* birth time */
 };
 
 struct rpc_generic_rep {
@@ -62,17 +60,17 @@ struct rpc_checkzero_req {
 
 #define rpc_checkzero_rep rpc_generic_rep
 
-struct rpc_getcrc_req {
+struct rpc_getcksum_req {
 	uint64_t		off;
 	uint64_t		len;
 };
 
 #define ALGLEN 32
-struct rpc_getcrc_rep {
-	uint64_t		digest[ALGLEN];
+struct rpc_getcksum_rep {
+	char			digest[ALGLEN];
 };
 
-struct rpc_pushname {
+struct rpc_putname {
 	struct rpc_sub_stat	pstb;
 	char			fn[0];
 };

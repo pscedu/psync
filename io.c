@@ -1,19 +1,24 @@
 /* $Id$ */
 
+#include <sys/param.h>
+#include <sys/stat.h>
+
+#include <fcntl.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <unistd.h>
 
-struct file {
-	struct psc_hashent      hentry;
-	uint64_t		fid;
-	int			fd;
+#include "pfl/alloc.h"
+#include "pfl/hashtbl.h"
+#include "pfl/random.h"
+#include "pfl/str.h"
+#include "pfl/walk.h"
 
-};
-
+#include "psync.h"
 
 struct psc_hashtbl	 fcache;
-
+struct psc_hashtbl	 xmcache;
 
 void
 objns_makepath(char *fn, uint64_t fid)
@@ -23,7 +28,7 @@ objns_makepath(char *fn, uint64_t fid)
 	char *p;
 	int i;
 
-	i = snprintf(fn, PATH_MAX, "%s/", objns);
+	i = snprintf(fn, PATH_MAX, "%s/", objns_path);
 	/*
 	 * ensure name fits into:
 	 * <objns_dir>/abc/abcd0123abcd0123
@@ -39,17 +44,11 @@ objns_makepath(char *fn, uint64_t fid)
 	*p++ = '/';
 	*p = '\0';
 
-	if (mkdir(fn) == -1 && errno != EEXIST)
+	if (mkdir(fn, 0700) == -1 && errno != EEXIST)
 		err(1, "mkdir %s", fn);
 
 	snprintf(p, PATH_MAX - (p - fn), "%016"PRIx64, fid);
 }
-
-struct xid_mapping {
-	struct psc_hashent       hentry;
-	uint64_t		 xid;
-	const char		*fn;
-};
 
 void
 xm_insert(uint64_t xid, const char *fn)
@@ -63,20 +62,17 @@ xm_insert(uint64_t xid, const char *fn)
 	psc_hashtbl_add_item(&xmcache, xm);
 }
 
-#define fcache_search(fid)	_fcache_search((fid), -1)
-#define fcache_insert(fid, fd)	_fcache_search((fid), (fd))
-
 int
 _fcache_search(uint64_t fid, int fd)
 {
 	struct psc_hashbkt *b;
 	struct file *f;
 
-	f = pfl_hashtbl_search(&fcache, NULL, NULL, &fid);
+	f = psc_hashtbl_search(&fcache, NULL, NULL, &fid);
 	if (f)
 		goto out;
 
-	b = pfl_hashbkt_get(&fcache, &fid);
+	b = psc_hashbkt_get(&fcache, &fid);
 	psc_hashbkt_lock(b);
 	f = psc_hashbkt_search(&fcache, b, NULL, NULL, &fid);
 	if (f == NULL) {
@@ -88,7 +84,8 @@ _fcache_search(uint64_t fid, int fd)
 			char fn[PATH_MAX];
 
 			objns_makepath(fn, fid);
-			f->fd = open(fn, O_RDWR | O_CREAT | O_EXCL, 0600);
+			f->fd = open(fn, O_RDWR | O_CREAT | O_EXCL,
+			    0600);
 			if (f->fd == -1)
 				err(1, "%s", fn);
 		} else {
@@ -120,15 +117,13 @@ fcache_close(uint64_t fid)
 void
 objns_create(void)
 {
-	char fn[PATH_MAX];
-
-	snprintf(objns, sizeof(objns), ".psync.%d",
+	snprintf(objns_path, sizeof(objns_path), ".psync.%d",
 	    psc_random32u(1000000));
-	if (mkdir(objns, 0700) == -1)
-		err(1, "mkdir %s", objns);
+	if (mkdir(objns_path, 0700) == -1)
+		err(1, "mkdir %s", objns_path);
 }
 
-int
+void
 fcache_init(void)
 {
 	/*
@@ -143,7 +138,7 @@ fcache_init(void)
 }
 
 int
-objns_rm_cb(const char *fn, __unusedx const struct pfl_stat *stb,
+objns_rm_cb(const char *fn, __unusedx const struct stat *stb,
     int ftyp, __unusedx int level, __unusedx void *arg)
 {
 	switch (ftyp) {
@@ -175,5 +170,6 @@ fcache_destroy(void)
 		}
 
 	/* unlink object namespace */
-	pfl_walkfiles(objns, PFL_FILEWALKF_RECURSIVE, objns_rm_cb, NULL);
+	pfl_filewalk(objns_path, PFL_FILEWALKF_RECURSIVE, NULL,
+	    objns_rm_cb, NULL);
 }

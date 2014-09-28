@@ -10,12 +10,15 @@ struct hdr {
 	uint64_t		xid;	/* message ID */
 };
 
-#define OPC_GETFILE		0
-#define OPC_PUTDATA		1
-#define OPC_CHECKZERO		2
-#define OPC_GETCKSUM		2
-#define OPC_PUTNAME		3
-#define OPC_CTL			4
+#define OPC_GETFILE_REQ		0
+#define OPC_GETFILE_REP		1
+#define OPC_PUTDATA		2
+#define OPC_CHECKZERO_REQ	3
+#define OPC_CHECKZERO_REP	4
+#define OPC_GETCKSUM_REQ	5
+#define OPC_GETCKSUM_REP	6
+#define OPC_PUTNAME		7
+#define OPC_CTL			8
 
 struct rpc_sub_stat {
 	uint64_t		dev;
@@ -61,6 +64,7 @@ struct rpc_checkzero_req {
 #define rpc_checkzero_rep rpc_generic_rep
 
 struct rpc_getcksum_req {
+	uint64_t		fid;
 	uint64_t		off;
 	uint64_t		len;
 };
@@ -72,10 +76,17 @@ struct rpc_getcksum_rep {
 
 struct rpc_putname {
 	struct rpc_sub_stat	pstb;
+	uint64_t		fid;
 	char			fn[0];
 };
 
 struct rpc_ctl {
 };
+
+void rpc_send_getfile(uint64_t, const char *);
+void rpc_send_putdata(uint64_t, off_t, const void *, size_t);
+void rpc_send_putname(const char *, const struct stat *);
+
+void handle_signal(int);
 
 #endif /* _RPC_H_ */

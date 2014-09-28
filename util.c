@@ -8,6 +8,8 @@
 #include "pfl/alloc.h"
 #include "pfl/dynarray.h"
 
+#include "psync.h"
+
 char **
 str_split(char *s)
 {

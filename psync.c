@@ -23,6 +23,7 @@
 #include <ctype.h>
 #include <err.h>
 #include <errno.h>
+#include <fcntl.h>
 #include <getopt.h>
 #include <stdint.h>
 #include <stdlib.h>
@@ -41,6 +42,22 @@
 #include "pfl/timerthr.h"
 #include "pfl/types.h"
 #include "pfl/walk.h"
+
+#include "psync.h"
+#include "rpc.h"
+
+struct work {
+	struct psc_listentry	  wk_lentry;
+	char			  wk_fn[PATH_MAX];
+	struct filehandle	 *wk_fh;
+	char			  wk_host[HOST_NAME_MAX + 1];
+	int			  wk_type;
+	size_t			  wk_len;
+	struct stat		  wk_stb;
+	uint64_t		  wk_xid;
+	off_t			  wk_off;
+	void			(*wk_cb)(struct work *);
+};
 
 enum {
 	THRT_MAIN,
@@ -116,7 +133,6 @@ int			 opt_keep_dirlinks;
 int			 opt_links;
 int			 opt_list_only;
 int			 opt_no_implied_dirs;
-int			 opt_nthreads;
 int			 opt_numeric_ids;
 int			 opt_omit_dir_times;
 int			 opt_one_file_system;
@@ -126,13 +142,13 @@ int			 opt_perms;
 int			 opt_port;
 int			 opt_progress;
 int			 opt_prune_empty_dirs;
+int			 opt_puppet;
 int			 opt_quiet;
 int			 opt_recursive;
 int			 opt_relative;
 int			 opt_remove_source_file;
 int			 opt_remove_source_files;
 int			 opt_safe_links;
-int			 opt_puppet;
 int			 opt_size_only;
 int			 opt_sparse;
 int			 opt_specials;
@@ -150,9 +166,14 @@ struct psc_dynarray	 opt_files = DYNARRAY_INIT;
 struct psc_dynarray	 opt_filter = DYNARRAY_INIT;
 struct psc_dynarray	 opt_include = DYNARRAY_INIT;
 
+struct psc_poolmaster	 buf_poolmaster;
+struct psc_poolmgr	*buf_pool;
+
 struct psc_poolmaster	 work_poolmaster;
 struct psc_poolmgr	*work_pool;
 struct psc_listcache	 workq;
+
+struct psc_dynarray	 streams = DYNARRAY_INIT;
 
 #define NO_ARG		no_argument
 #define REQARG		required_argument
@@ -254,7 +275,6 @@ struct option opts[] = {
 	{ "min-size",		REQARG,	NULL,			OPT_MIN_SIZE },
 	{ "modify-window",	REQARG,	NULL,			OPT_MODIFY_WINDOW },
 	{ "no-implied-dirs",	NO_ARG,	&opt_no_implied_dirs,	0x1 },
-	{ "nstreams",		REQARG,	&opt_nstreams,		'N' },
 	{ "numeric-ids",	NO_ARG,	&opt_numeric_ids,	0x1 },
 	{ "omit-dir-times",	NO_ARG,	NULL,			'O' },
 	{ "one-file-system",	NO_ARG,	NULL,			'x' },
@@ -295,39 +315,35 @@ struct option opts[] = {
 	{ NULL,			0,	NULL,			0 }
 };
 
-struct work {
-	struct psc_listentry	  wk_lentry;
-	char			  wk_srcfn[PATH_MAX];
-	struct filehandle	 *wk_fh;
-	char			  wk_host[HOST_NAME_MAX + 1];
-	int			  wk_type;
-	struct stat		  wk_stb;
-	void			(*wk_cb)(struct work *);
-};
-
-#define WK_ISPUT(wk)		((wk)->wk_flags & WKF_PUT)
-#define WK_ISGET(wk)		(!WK_ISPUT(wk))
-
-#define OPC_GETFILE		0
-#define OPC_PUTDATA		1
-#define OPC_CHECKZERO		2
-#define OPC_GETCKSUM		2
-#define OPC_PUTNAME		3
-#define OPC_CTL			4
+void
+filehandle_dropref(struct filehandle *fh, size_t len)
+{
+	spinlock(&fh->lock);
+	if (--fh->refcnt == 0 &&
+	    fh->flags & FHF_DONE) {
+		munmap(fh->base, len);
+		close(fh->fd);
+		PSCFREE(fh);
+	} else
+		freelock(&fh->lock);
+}
 
 void
 proc_work(struct work *wk)
 {
 	switch (wk->wk_type) {
-	case OPC_GETFILE:
-		rpc_send_getfile(srchost, srcfn, dstfn);
+	case OPC_GETFILE_REQ:
+		rpc_send_getfile(wk->wk_xid, wk->wk_fn);
 		break;
 	case OPC_PUTDATA:
-//	if (opt_sparse && region_is_zero())
-		rpc_send_putdata();
+		if (opt_sparse && !pfl_memchk(wk->wk_fh->base +
+		    wk->wk_off, 0, wk->wk_len))
+			rpc_send_putdata(wk->wk_stb.st_ino, wk->wk_off,
+			    wk->wk_fh->base + wk->wk_off, wk->wk_len);
+		filehandle_dropref(wk->wk_fh, wk->wk_stb.st_size);
 		break;
 	case OPC_PUTNAME:
-		rpc_send_putname();
+		rpc_send_putname(wk->wk_fn, &wk->wk_stb);
 		break;
 	}
 }
@@ -349,60 +365,75 @@ worker_main(struct psc_thread *thr)
 	}
 }
 
-struct filehandle {
-	int		fd;
-	int		flags;
-	int		refcnt;
-};
+struct work *
+work_getitem(int type)
+{
+	struct work *wk;
+
+	wk = psc_pool_get(work_pool);
+	memset(wk, 0, sizeof(*wk));
+	INIT_LISTENTRY(&wk->wk_lentry);
+	wk->wk_type = type;
+	wk->wk_cb = proc_work;
+	return (wk);
+}
 
 void
-enqueue(const char *srchost, const char *srcfn, const char *dsthost,
-    const char *dstfn, const struct stat *stb)
+enqueue(int is_fetch, const char *srcfn, const char *dstfn,
+    const struct stat *stb)
 {
+	size_t blksz = stb->st_blksize;
+	struct filehandle *fh;
+	struct work *wk;
 	off_t off = 0;
 
+	if (opt_block_size)
+		blksz = opt_block_size;
+
 	/* fetching */
-	if (srchost) {
-		fd = fcache_open(dstfn);
-		fcache_insert(pn->fid, fd);
-		goto fill;
+	if (is_fetch) {
+		wk = work_getitem(OPC_GETFILE_REQ);
+		wk->wk_xid = psc_atomic32_inc_getnew(&psync_xid);
+		xm_insert(wk->wk_xid, dstfn);
+		strlcpy(wk->wk_fn, srcfn, sizeof(wk->wk_fn));
+		lc_add(&workq, wk);
+		return;
 	}
 
-	fd = open(srcfn, O_RDONLY);
-	if (fd == -1)
+	/* sending; push name first */
+	fh = PSCALLOC(sizeof(*fh));
+
+	fh->fd = open(srcfn, O_RDONLY);
+	if (fh->fd == -1)
 		err(1, "%s", srcfn);
 
-	fh = PSCALLOC(sizeof(*fh));
-	fh->fd = fd;
+	INIT_SPINLOCK(&fh->lock);
+	fh->base = mmap(NULL, stb->st_size, PROT_READ, MAP_FILE |
+	    MAP_SHARED, fh->fd, 0);
 
-	/* sending */
+	wk = work_getitem(OPC_PUTNAME);
+	strlcpy(wk->wk_fn, dstfn, sizeof(wk->wk_fn));
+	lc_add(&workq, wk);
+
+	/* push data chunks */
 	for (; off < stb->st_size; off += blksz) {
- fill:
-		wk = psc_pool_get(work_pool);
-		memset(wk, 0, sizeof(*wk));
-		INIT_LISTENTRY(&wk->lentry);
-
-		strlcpy(wk->wk_host, srchost ? srchost : dsthost,
-		    sizeof(wk->wk_host));
-		strlcpy(wk->wk_fn, srchost ? srcfn : dstfn,
-		    sizeof(wk->wk_fn));
+		wk = work_getitem(OPC_PUTDATA);
 		wk->wk_fh = fh;
-		spinlock(&fh->lock);
-		fh->refcnt++;
-		freelock(&fh->lock);
+
+		if (fh) {
+			spinlock(&fh->lock);
+			fh->refcnt++;
+			freelock(&fh->lock);
+		}
 
 		if (stb)
 			memcpy(&wk->wk_stb, stb, sizeof(wk->wk_stb));
-		if (opt_recursive)
-			wk->wk_flags = WKF_RECURSE;
-		if (dsthost)
-			wk->wk_flags = WKF_PUT;
 		wk->wk_off = off;
-		wk->wk_cb = proc_work;
+		if (off + (off_t)blksz > stb->st_size)
+			wk->wk_len = stb->st_size % blksz;
+		else
+			wk->wk_len = blksz;
 		lc_add(&workq, wk);
-
-		if (srchost)
-			break;
 	}
 	spinlock(&fh->lock);
 	fh->flags |= FHF_DONE;
@@ -411,12 +442,12 @@ enqueue(const char *srchost, const char *srcfn, const char *dsthost,
 }
 
 int
-walk_cb(const char *fn, const struct stat *stb, void *arg)
+walk_cb(const char *fn, const struct stat *stb, int type,
+    __unusedx int level, void *arg)
 {
-	char *dstfn = arg;
-	struct work *wk;
-	int j, rc = 0;
-	off_t off;
+	const char *dstprefix = arg;
+	char dstfn[PATH_MAX];
+	int rc = 0;
 
 #if 0
 	struct filterpat *fp;
@@ -432,15 +463,18 @@ walk_cb(const char *fn, const struct stat *stb, void *arg)
 	}
 #endif
 
-	enqueue(dstfn);
+	snprintf(dstfn, sizeof(dstfn), "%s/%s",
+	    dstprefix ? dstprefix : ".", fn);
+	enqueue(0, fn, dstfn, stb);
 
 	return (rc);
 }
 
-
 int
 walkfiles(const char *srcfn, int flags, const char *dstfn)
 {
+	struct stat stb;
+
 	/*
 	 * psync a ... b
 	 * psync nonexist ... b
@@ -449,11 +483,15 @@ walkfiles(const char *srcfn, int flags, const char *dstfn)
 	 * psync rem:fn ... loc
 	 * psync rem1:fn ... rem2:fn2
 	 */
-	if (strchr(srcfn, ':') && stat(srcfn) == 0) {
-		enqueue();
+	if (strchr(srcfn, ':') && stat(srcfn, &stb) == 0) {
+		/* get */
+		enqueue(1, srcfn, dstfn, &stb);
 	} else {
-		pfl_walkfiles(fn, flags, walk_cb, dst);
+		/* put */
+		pfl_filewalk(srcfn, flags, NULL, walk_cb,
+		    (void *)dstfn);
 	}
+	return (0);
 }
 
 void
@@ -549,16 +587,16 @@ push_files_from(struct psc_dynarray *da, char *fn,
 	push(da, fn);
 }
 
-void
-fromfile(const char *fn, int flags, const char *dst)
+int
+fromfile(const char *fromfn, int flags, const char *dst)
 {
 	char fn[PATH_MAX], *p = fn;
-	int rc = 0, rv, lineno = 1;
+	int rc = 0, rv, c, lineno = 1;
 	FILE *fp;
 
-	fp = fopen(fn, "r");
+	fp = fopen(fromfn, "r");
 	if (fp == NULL)
-		err(1, "open %s", fn);
+		err(1, "open %s", fromfn);
 	for (;;) {
 		c = fgetc(fp);
 		if (c == EOF)
@@ -575,7 +613,7 @@ fromfile(const char *fn, int flags, const char *dst)
 		} else {
 			if (p == fn + sizeof(fn) - 1) {
 				errno = ENAMETOOLONG;
-				warn("%s:%d", fn, lineno);
+				warn("%s:%d", fromfn, lineno);
 			} else
 				*p++ = c;
 		}
@@ -593,16 +631,10 @@ fromfile(const char *fn, int flags, const char *dst)
 int
 puppet_mode(void)
 {
-	void *buf;
-	int rfd;
+	struct stream *st;
 
-	signal(SIGINT, handle_signal);
-	signal(SIGPIPE, handle_signal);
-
-	fcache_init();
-
-	stream.rfd = rfd = STDIN_FILENO;
-	stream.wfd = STDOUT_FILENO;
+	st = stream_create(STDIN_FILENO, STDOUT_FILENO);
+	psc_dynarray_add(&streams, st);
 
 	recvthr_main(pscthr_get());
 
@@ -671,8 +703,8 @@ main(int argc, char *argv[])
 		case 'l':		opt_links = 1;			break;
 		case 'm':		opt_prune_empty_dirs = 1;	break;
 		case 'N':
-			if (!parsenum(&opt_nstreams, optarg, 0, 64))
-				err(1, "-n %s", optarg);
+			if (!parsenum(&opt_streams, optarg, 0, 64))
+				err(1, "streams: %s", optarg);
 			break;
 		case 'n':		opt_dry_run = 1;		break;
 		case 'O':		opt_omit_dir_times = 1;		break;
@@ -770,40 +802,51 @@ main(int argc, char *argv[])
 
 	pscthr_init(THRT_MAIN, 0, NULL, NULL, 0, "main");
 
+	struct psc_poolmaster	 buf_poolmaster;
+	struct psc_poolmgr	*buf_pool;
+
+	psc_poolmaster_init(&buf_poolmaster, struct buf, lentry,
+	    PPMF_AUTO, 16, 16, 0, NULL, NULL, NULL, "buf");
+	buf_pool = psc_poolmaster_getmgr(&buf_poolmaster);
+
+	psc_poolmaster_init(&work_poolmaster, struct work, wk_lentry,
+	    PPMF_AUTO, 16, 16, 0, NULL, NULL, NULL, "buf");
+	work_pool = psc_poolmaster_getmgr(&work_poolmaster);
+
+	fcache_init();
+
+	signal(SIGINT, handle_signal);
+	signal(SIGPIPE, handle_signal);
+
+	lc_reginit(&workq, struct work, wk_lentry, "workq");
+
 	if (opt_puppet)
 		exit(puppet_mode());
 
 	psc_tiosthr_spawn(THRT_TIOS, "tios");
 
-	lc_reginit(&workq, struct work, wk_lentry, "workq");
+	for (i = 0; i < opt_streams; i++) {
+		struct recvthr *rt;
+		struct stream *st;
 
-	signal(SIGINT, handle_signal);
-	signal(SIGPIPE, handle_signal);
-
-	fcache_init();
-
-	for (i = 0; i < opt_nstreams; i++) {
-		struct stream st;
-		struct wkthr *wt;
+		thr = pscthr_init(THRT_WK, 0, worker_main, NULL, 0,
+		    "wkthr%d", i);
+		push(&threads, thr);
 
 		/*
 		 * add:
 		 *	--sparse
 		 *	--exclude filter patterns
 		 */
-		stream_cmdopen(&st, "%s %s --PUPPET",
-		    opt_rsh, opt_psync_path, id);
+		st = stream_cmdopen("%s %s --PUPPET",
+		    opt_rsh, opt_psync_path);
 
-		thr = pscthr_init(THRT_WK, 0, worker_main, NULL,
-		    sizeof(*wt), "wkthr%d", i);
-		wt = thr->pscthr_private;
-		wt->stream = st;
-		push(&threads, thr);
+		psc_dynarray_add(&streams, st);
 
 		thr = pscthr_init(THRT_RECV, 0, recvthr_main, NULL,
-		    sizeof(*wt), "recvthr%d", i);
-		wt = thr->pscthr_private;
-		wt->stream = st;
+		    sizeof(*rt), "recvthr%d", i);
+		rt = thr->pscthr_private;
+		rt->st = st;
 		push(&threads, thr);
 	}
 

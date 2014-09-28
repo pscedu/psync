@@ -1,13 +1,14 @@
 # $Id$
 
-ROOTDIR=../..
+ROOTDIR=..
 include ${ROOTDIR}/Makefile.path
 
 PROG=		psync
+SRCS+=		io.c
 SRCS+=		psync.c
-SRCS+=		puppet.c
-SRCS+=		util.c
+SRCS+=		rpc.c
 SRCS+=		stream.c
-MODULES+=	pfl
+SRCS+=		util.c
+MODULES+=	pfl gcrypt
 
 include ${MAINMK}

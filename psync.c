@@ -153,7 +153,7 @@ int			 opt_size_only;
 int			 opt_sparse;
 int			 opt_specials;
 int			 opt_stats;
-int			 opt_streams;
+int			 opt_streams = 1;
 int			 opt_super;
 int			 opt_timeout;		/* in seconds */
 int			 opt_times;
@@ -212,16 +212,16 @@ enum {
 
 struct option opts[] = {
 	{ "8-bit-output",	NO_ARG,	NULL,			'8' },
-	{ "PUPPET",		NO_ARG,	&opt_puppet,		0x1 },
+	{ "PUPPET",		NO_ARG,	&opt_puppet,		1 },
 	{ "address",		REQARG,	NULL,			OPT_ADDRESS },
-	{ "append",		NO_ARG,	&opt_append,		0x1 },
+	{ "append",		NO_ARG,	&opt_append,		1 },
 	{ "archive",		NO_ARG,	NULL,			'a' },
 	{ "backup",		NO_ARG,	NULL,			'b' },
-	{ "backup-dir",		NO_ARG,	NULL,			0x1 },
+	{ "backup-dir",		NO_ARG,	NULL,			1 },
 	{ "block-size",		REQARG,	NULL,			'B' },
-	{ "blocking-io",	NO_ARG,	&opt_blocking_io,	0x1 },
+	{ "blocking-io",	NO_ARG,	&opt_blocking_io,	1 },
 	{ "bwlimit",		REQARG,	NULL,			OPT_BWLIMIT },
-	{ "cache",		NO_ARG,	&opt_cache,		0x1 },
+	{ "cache",		NO_ARG,	&opt_cache,		1 },
 	{ "checksum",		NO_ARG,	NULL,			'c' },
 	{ "chmod",		REQARG,	NULL,			OPT_CHMOD },
 	{ "compare-dest",	REQARG,	NULL,			OPT_COMPARE_DEST },
@@ -230,80 +230,80 @@ struct option opts[] = {
 	{ "copy-dest",		REQARG,	NULL,			OPT_COPY_DEST },
 	{ "copy-dirlinks",	NO_ARG,	NULL,			'k' },
 	{ "copy-links",		NO_ARG,	NULL,			'L' },
-	{ "copy-unsafe-links",	NO_ARG,	&opt_copy_unsafe_links,	0x1 },
+	{ "copy-unsafe-links",	NO_ARG,	&opt_copy_unsafe_links,	1 },
 	{ "cvs-exclude",	NO_ARG,	NULL,			'C' },
-	{ "del",		NO_ARG,	&opt_del,		0x1 },
-	{ "delay-updates",	NO_ARG,	&opt_delay_updates,	0x1 },
-	{ "delete",		NO_ARG,	&opt_delete,		0x1 },
-	{ "delete-after",	NO_ARG,	&opt_delete_after,	0x1 },
-	{ "delete-before",	NO_ARG,	&opt_delete_before,	0x1 },
-	{ "delete-during",	NO_ARG,	&opt_delete_during,	0x1 },
-	{ "delete-excluded",	NO_ARG,	&opt_delete_excluded,	0x1 },
-	{ "devices",		NO_ARG,	&opt_devices,		0x1 },
+	{ "del",		NO_ARG,	&opt_del,		1 },
+	{ "delay-updates",	NO_ARG,	&opt_delay_updates,	1 },
+	{ "delete",		NO_ARG,	&opt_delete,		1 },
+	{ "delete-after",	NO_ARG,	&opt_delete_after,	1 },
+	{ "delete-before",	NO_ARG,	&opt_delete_before,	1 },
+	{ "delete-during",	NO_ARG,	&opt_delete_during,	1 },
+	{ "delete-excluded",	NO_ARG,	&opt_delete_excluded,	1 },
+	{ "devices",		NO_ARG,	&opt_devices,		1 },
 	{ "dirs",		NO_ARG,	NULL,			'd' },
 	{ "dry-run",		NO_ARG,	NULL,			'n' },
 	{ "exclude",		REQARG,	NULL,			OPT_EXCLUDE },
 	{ "exclude-from",	REQARG,	NULL,			OPT_EXCLUDE_FROM },
-	{ "executability",	NO_ARG,	&opt_excutability,	0x1 },
-	{ "existing",		NO_ARG,	&opt_existing,		0x1 },
+	{ "executability",	NO_ARG,	&opt_excutability,	1 },
+	{ "existing",		NO_ARG,	&opt_existing,		1 },
 	{ "extended-attributes",NO_ARG,	NULL,			'E' },
 	{ "files-from",		REQARG,	NULL,			OPT_FILES_FROM },
 	{ "filter",		REQARG,	NULL,			'f' },
-	{ "force",		NO_ARG,	&opt_force,		0x1 },
+	{ "force",		NO_ARG,	&opt_force,		1 },
 	{ "from0",		NO_ARG,	NULL,			'0' },
 	{ "fuzzy",		NO_ARG,	NULL,			'y' },
 	{ "group",		NO_ARG,	NULL,			'g' },
 	{ "hard-links",		NO_ARG,	NULL,			'H' },
 	{ "human-readable",	NO_ARG,	NULL,			'h' },
-	{ "ignore-errors",	NO_ARG,	&opt_ignore_errors,	0x1 },
-	{ "ignore-existing",	NO_ARG,	&opt_ignore_existing,	0x1 },
+	{ "ignore-errors",	NO_ARG,	&opt_ignore_errors,	1 },
+	{ "ignore-existing",	NO_ARG,	&opt_ignore_existing,	1 },
 	{ "ignore-times",	NO_ARG,	NULL,			'I' },
 	{ "include",		REQARG,	NULL,			OPT_INCLUDE },
 	{ "include-from",	REQARG,	NULL,			OPT_INCLUDE_FROM },
-	{ "inplace",		NO_ARG,	&opt_inplace,		0x1 },
+	{ "inplace",		NO_ARG,	&opt_inplace,		1 },
 	{ "ipv4",		NO_ARG,	NULL,			'4' },
 	{ "ipv6",		NO_ARG,	NULL,			'6' },
 	{ "itemize-changes",	NO_ARG,	NULL,			'i' },
 	{ "keep-dirlinks",	NO_ARG,	NULL,			'K' },
 	{ "link-dest",		REQARG,	NULL,			OPT_LINK_DEST },
 	{ "links",		NO_ARG,	NULL,			'l' },
-	{ "list-only",		NO_ARG,	&opt_list_only,		0x1 },
+	{ "list-only",		NO_ARG,	&opt_list_only,		1 },
 	{ "log-file",		REQARG,	NULL,			OPT_LOG_FILE },
 	{ "log-file-format",	REQARG,	NULL,			OPT_LOG_FILE_FORMAT },
 	{ "max-delete",		REQARG,	NULL,			OPT_MAX_DELETE },
 	{ "max-size",		REQARG,	NULL,			OPT_MAX_SIZE },
 	{ "min-size",		REQARG,	NULL,			OPT_MIN_SIZE },
 	{ "modify-window",	REQARG,	NULL,			OPT_MODIFY_WINDOW },
-	{ "no-implied-dirs",	NO_ARG,	&opt_no_implied_dirs,	0x1 },
-	{ "numeric-ids",	NO_ARG,	&opt_numeric_ids,	0x1 },
+	{ "no-implied-dirs",	NO_ARG,	&opt_no_implied_dirs,	1 },
+	{ "numeric-ids",	NO_ARG,	&opt_numeric_ids,	1 },
 	{ "omit-dir-times",	NO_ARG,	NULL,			'O' },
 	{ "one-file-system",	NO_ARG,	NULL,			'x' },
 	{ "only-write-batch",	REQARG,	NULL,			OPT_ONLY_WRITE_BATCH },
 	{ "out-format",		REQARG,	NULL,			OPT_OUT_FORMAT },
 	{ "owner",		NO_ARG,	NULL,			'o' },
-	{ "partial",		NO_ARG,	&opt_partial,		0x1 },
+	{ "partial",		NO_ARG,	&opt_partial,		1 },
 	{ "partial-dir",	REQARG,	NULL,			OPT_PARTIAL_DIR },
 	{ "password-file",	REQARG,	NULL,			OPT_PASSWORD_FILE },
 	{ "perms",		NO_ARG,	NULL,			'p' },
 	{ "port",		REQARG,	NULL,			OPT_PORT },
-	{ "progress",		NO_ARG,	&opt_progress,		0x1 },
+	{ "progress",		NO_ARG,	&opt_progress,		1 },
 	{ "prune-empty-dirs",	NO_ARG,	NULL,			'm' },
 	{ "psync-path",		REQARG,	NULL,			OPT_PSYNC_PATH },
 	{ "quiet",		NO_ARG,	NULL,			'q' },
 	{ "read-batch",		REQARG,	NULL,			OPT_READ_BATCH },
 	{ "recursive",		NO_ARG,	NULL,			'r' },
 	{ "relative",		NO_ARG,	NULL,			'R' },
-	{ "remove-source-files",NO_ARG,	&opt_remove_source_files,0x1 },
+	{ "remove-source-files",NO_ARG,	&opt_remove_source_files,1 },
 	{ "rsh",		REQARG,	NULL,			'e' },
-	{ "safe-links",		NO_ARG,	&opt_safe_links,	0x1 },
-	{ "size-only",		NO_ARG,	&opt_size_only,		0x1 },
+	{ "safe-links",		NO_ARG,	&opt_safe_links,	1 },
+	{ "size-only",		NO_ARG,	&opt_size_only,		1 },
 	{ "sockopts",		REQARG,	NULL,			OPT_SOCKOPTS },
 	{ "sparse",		NO_ARG,	NULL,			'S' },
-	{ "specials",		NO_ARG,	&opt_specials,		0x1 },
-	{ "stats",		NO_ARG,	&opt_stats,		0x1 },
-	{ "streams",		REQARG,	&opt_streams,		0x1 },
+	{ "specials",		NO_ARG,	&opt_specials,		1 },
+	{ "stats",		NO_ARG,	&opt_stats,		1 },
+	{ "streams",		REQARG,	&opt_streams,		1 },
 	{ "suffix",		REQARG,	NULL,			OPT_SUFFIX },
-	{ "super",		NO_ARG,	&opt_super,		0x1 },
+	{ "super",		NO_ARG,	&opt_super,		1 },
 	{ "temp-dir",		REQARG,	NULL,			'T' },
 	{ "timeout",		REQARG,	NULL,			OPT_TIMEOUT },
 	{ "times",		NO_ARG,	NULL,			't' },
@@ -382,13 +382,10 @@ void
 enqueue(int is_fetch, const char *srcfn, const char *dstfn,
     const struct stat *stb)
 {
-	size_t blksz = stb->st_blksize;
 	struct filehandle *fh;
 	struct work *wk;
 	off_t off = 0;
-
-	if (opt_block_size)
-		blksz = opt_block_size;
+	size_t blksz;
 
 	/* fetching */
 	if (is_fetch) {
@@ -396,13 +393,23 @@ enqueue(int is_fetch, const char *srcfn, const char *dstfn,
 		wk->wk_xid = psc_atomic32_inc_getnew(&psync_xid);
 		xm_insert(wk->wk_xid, dstfn);
 		strlcpy(wk->wk_fn, srcfn, sizeof(wk->wk_fn));
+		// if (!opt_partial)
+		// truncate(dstfn, 0);
 		lc_add(&workq, wk);
 		return;
 	}
 
-	/* sending; push name first */
-	fh = PSCALLOC(sizeof(*fh));
+	blksz = opt_block_size ? (blksize_t)opt_block_size :
+	    stb->st_blksize;
 
+	/* sending; push name first */
+	wk = work_getitem(OPC_PUTNAME);
+	strlcpy(wk->wk_fn, dstfn, sizeof(wk->wk_fn));
+	lc_add(&workq, wk);
+
+	// S_ISREG()
+
+	fh = PSCALLOC(sizeof(*fh));
 	fh->fd = open(srcfn, O_RDONLY);
 	if (fh->fd == -1)
 		err(1, "%s", srcfn);
@@ -410,10 +417,6 @@ enqueue(int is_fetch, const char *srcfn, const char *dstfn,
 	INIT_SPINLOCK(&fh->lock);
 	fh->base = mmap(NULL, stb->st_size, PROT_READ, MAP_FILE |
 	    MAP_SHARED, fh->fd, 0);
-
-	wk = work_getitem(OPC_PUTNAME);
-	strlcpy(wk->wk_fn, dstfn, sizeof(wk->wk_fn));
-	lc_add(&workq, wk);
 
 	/* push data chunks */
 	for (; off < stb->st_size; off += blksz) {
@@ -426,8 +429,7 @@ enqueue(int is_fetch, const char *srcfn, const char *dstfn,
 			freelock(&fh->lock);
 		}
 
-		if (stb)
-			memcpy(&wk->wk_stb, stb, sizeof(wk->wk_stb));
+		memcpy(&wk->wk_stb, stb, sizeof(wk->wk_stb));
 		wk->wk_off = off;
 		if (off + (off_t)blksz > stb->st_size)
 			wk->wk_len = stb->st_size % blksz;
@@ -442,7 +444,7 @@ enqueue(int is_fetch, const char *srcfn, const char *dstfn,
 }
 
 int
-walk_cb(const char *fn, const struct stat *stb, int type,
+walk_cb(const char *fn, const struct stat *stb, __unusedx int type,
     __unusedx int level, void *arg)
 {
 	const char *dstprefix = arg;
@@ -473,7 +475,7 @@ walk_cb(const char *fn, const struct stat *stb, int type,
 int
 walkfiles(const char *srcfn, int flags, const char *dstfn)
 {
-	struct stat stb;
+	const char *p;
 
 	/*
 	 * psync a ... b
@@ -481,15 +483,20 @@ walkfiles(const char *srcfn, int flags, const char *dstfn)
 	 * psync loc rem:fn
 	 * psync nonexist ... rem:fn
 	 * psync rem:fn ... loc
+	 *
 	 * psync rem1:fn ... rem2:fn2
 	 */
-	if (strchr(srcfn, ':') && stat(srcfn, &stb) == 0) {
-		/* get */
-		enqueue(1, srcfn, dstfn, &stb);
-	} else {
+	p = strchr(dstfn, ':');
+	if (p) {
+		p++;
+
 		/* put */
 		pfl_filewalk(srcfn, flags, NULL, walk_cb,
-		    (void *)dstfn);
+		    (void *)(*p ? p : pfl_basename(srcfn)));
+	} else {
+		/* get */
+		enqueue(1, srcfn[0] ? srcfn : pfl_basename(dstfn),
+		    dstfn, NULL);
 	}
 	return (0);
 }
@@ -588,7 +595,7 @@ push_files_from(struct psc_dynarray *da, char *fn,
 }
 
 int
-fromfile(const char *fromfn, int flags, const char *dst)
+fromfile(const char *fromfn, int flags, const char *dstfn)
 {
 	char fn[PATH_MAX], *p = fn;
 	int rc = 0, rv, c, lineno = 1;
@@ -605,7 +612,7 @@ fromfile(const char *fromfn, int flags, const char *dst)
 			lineno++;
 			*p = '\0';
 			if (p != fn) {
-				rv = walkfiles(fn, flags, dst);
+				rv = walkfiles(fn, flags, dstfn);
 				if (rv)
 					rc = rv;
 			}
@@ -621,7 +628,7 @@ fromfile(const char *fromfn, int flags, const char *dst)
 	fclose(fp);
 	if (p != fn) {
 		*p = '\0';
-		rv = walkfiles(fn, flags, dst);
+		rv = walkfiles(fn, flags, dstfn);
 		if (rv)
 			rc = rv;
 	}
@@ -632,6 +639,9 @@ int
 puppet_mode(void)
 {
 	struct stream *st;
+
+	signal(SIGINT, handle_signal);
+	signal(SIGPIPE, handle_signal);
 
 	st = stream_create(STDIN_FILENO, STDOUT_FILENO);
 	psc_dynarray_add(&streams, st);
@@ -653,14 +663,18 @@ int
 main(int argc, char *argv[])
 {
 	int flags, i, rv, rc = 0, c;
+	char *p, *fn, *dsthost, *host, *dstfn;
 	struct psc_dynarray threads = DYNARRAY_INIT;
 	struct psc_thread *thr;
-	char *fn, *dst;
 
 #if 0
 	setenv("PSC_LOG_FORMAT", "%n: ", 0);
 	setenv("PSC_LOG_LEVEL", "warn", 0);
 #endif
+
+for (i=0; i < argc; i++)
+  fprintf(stderr, "[%s] ", argv[i]);
+fprintf(stderr, "\n");
 
 	pfl_init();
 	progname = argv[0];
@@ -790,38 +804,59 @@ main(int argc, char *argv[])
 				err(1, "--timeout=%s", optarg);
 			break;
 		case OPT_WRITE_BATCH:	opt_write_batch = optarg;	break;
+		case 0:
+			break;
 		default:
+			warn("invalid option: -%c", c);
 			usage();
 		}
 	}
 	argc -= optind;
 	argv += optind;
-	if (argc < 2 ||
-	    (argc == 1 && psc_dynarray_len(&opt_files) == 0))
-		usage();
 
 	pscthr_init(THRT_MAIN, 0, NULL, NULL, 0, "main");
-
-	struct psc_poolmaster	 buf_poolmaster;
-	struct psc_poolmgr	*buf_pool;
 
 	psc_poolmaster_init(&buf_poolmaster, struct buf, lentry,
 	    PPMF_AUTO, 16, 16, 0, NULL, NULL, NULL, "buf");
 	buf_pool = psc_poolmaster_getmgr(&buf_poolmaster);
 
 	psc_poolmaster_init(&work_poolmaster, struct work, wk_lentry,
-	    PPMF_AUTO, 16, 16, 0, NULL, NULL, NULL, "buf");
+	    PPMF_AUTO, 16, 16, 0, NULL, NULL, NULL, "work");
 	work_pool = psc_poolmaster_getmgr(&work_poolmaster);
 
 	fcache_init();
-
-	signal(SIGINT, handle_signal);
-	signal(SIGPIPE, handle_signal);
 
 	lc_reginit(&workq, struct work, wk_lentry, "workq");
 
 	if (opt_puppet)
 		exit(puppet_mode());
+
+	if (argc < 2 ||
+	    (argc == 1 && psc_dynarray_len(&opt_files) == 0))
+		usage();
+
+	dsthost = argv[--argc];
+	dstfn = strchr(dsthost, ':');
+	if (dstfn) {
+		*dstfn++ = '\0';
+		host = dsthost;
+	} else {
+		dstfn = dsthost;
+		dsthost = NULL;
+
+		host = argv[0];
+		for (i = 0; i < argc; i++) {
+			p = strchr(argv[i], ':');
+			if (p == NULL)
+				errx(1, "no source host specified");
+			*p++ = '\0';
+			if (strcmp(argv[i], host)) {
+				errno = ENOTSUP;
+				errx(1, "multiple source hosts");
+			}
+			argv[i] = p;
+		}
+	}
 
 	psc_tiosthr_spawn(THRT_TIOS, "tios");
 
@@ -838,8 +873,8 @@ main(int argc, char *argv[])
 		 *	--sparse
 		 *	--exclude filter patterns
 		 */
-		st = stream_cmdopen("%s %s --PUPPET",
-		    opt_rsh, opt_psync_path);
+		st = stream_cmdopen("%s %s %s --PUPPET",
+		    opt_rsh, host, opt_psync_path);
 
 		psc_dynarray_add(&streams, st);
 
@@ -856,14 +891,16 @@ main(int argc, char *argv[])
 	if (opt_verbose)
 		flags |= PFL_FILEWALKF_VERBOSE;
 
-	dst = argv[--argc];
+	signal(SIGINT, handle_signal);
+	signal(SIGPIPE, handle_signal);
+
 	for (i = 0; i < argc; i++) {
-		rv = walkfiles(argv[i], flags, dst);
+		rv = walkfiles(argv[i], flags, dstfn);
 		if (rv)
 			rc = rv;
 	}
 	DYNARRAY_FOREACH(fn, i, &opt_files) {
-		rv = fromfile(fn, flags, dst);
+		rv = fromfile(fn, flags, dstfn);
 		if (rv)
 			rc = rv;
 	}

@@ -21,12 +21,33 @@ struct psc_hashtbl	 fcache;
 struct psc_hashtbl	 xmcache;
 
 void
+objns_create(void)
+{
+	static psc_spinlock_t lock = SPINLOCK_INIT;
+
+	spinlock(&lock);
+	if (objns_path[0] == '\0') {
+		snprintf(objns_path, sizeof(objns_path), ".psync.%d",
+		    psc_random32u(1000000));
+		if (mkdir(objns_path, 0700) == -1)
+			err(1, "mkdir %s", objns_path);
+	}
+	freelock(&lock);
+}
+
+void
 objns_makepath(char *fn, uint64_t fid)
 {
 	static char objns_tab[] = "0123456789abcdef";
+	static int init;
 
 	char *p;
 	int i;
+
+	if (!init) {
+		objns_create();
+		init = 1;
+	}
 
 	i = snprintf(fn, PATH_MAX, "%s/", objns_path);
 	/*
@@ -43,6 +64,8 @@ objns_makepath(char *fn, uint64_t fid)
 		*p++ = objns_tab[(fid >> (4 * (i + 2))) & 0xf];
 	*p++ = '/';
 	*p = '\0';
+
+	/* XXX could use a bitmap to skip this */
 
 	if (mkdir(fn, 0700) == -1 && errno != EEXIST)
 		err(1, "mkdir %s", fn);
@@ -115,15 +138,6 @@ fcache_close(uint64_t fid)
 }
 
 void
-objns_create(void)
-{
-	snprintf(objns_path, sizeof(objns_path), ".psync.%d",
-	    psc_random32u(1000000));
-	if (mkdir(objns_path, 0700) == -1)
-		err(1, "mkdir %s", objns_path);
-}
-
-void
 fcache_init(void)
 {
 	/*
@@ -134,7 +148,6 @@ fcache_init(void)
 	    "fcache");
 	psc_hashtbl_init(&xmcache, 0, struct xid_mapping, xid, hentry, 191,
 	    NULL, "xmcache");
-	objns_create();
 }
 
 int
@@ -169,7 +182,9 @@ fcache_destroy(void)
 			PSCFREE(f);
 		}
 
-	/* unlink object namespace */
-	pfl_filewalk(objns_path, PFL_FILEWALKF_RECURSIVE, NULL,
-	    objns_rm_cb, NULL);
+	if (objns_path[0]) {
+		/* unlink object namespace */
+		pfl_filewalk(objns_path, PFL_FILEWALKF_RECURSIVE, NULL,
+		    objns_rm_cb, NULL);
+	}
 }

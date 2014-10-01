@@ -4,6 +4,8 @@
 #ifndef _PSYNC_H_
 #define _PSYNC_H_
 
+#define PSYNC_VERSION "1.0"
+
 #include "pfl/hashtbl.h"
 #include "pfl/pthrutil.h"
 
@@ -61,8 +63,6 @@ struct buf {
 
 #define atomicio_read(fd, buf, len)	atomicio(IOP_READ, (fd), (buf), (len))
 #define atomicio_write(fd, buf, len)	atomicio(IOP_WRITE, (fd), (buf), (len))
-
-#define PSYNC_VERSION "1.0"
 
 char	**str_split(char *);
 int	  parsenum(int *, const char *, int, int);

@@ -368,7 +368,8 @@ rpc_handle_putname(struct hdr *h, void *buf)
 			psclog_warn("chmod %s", ufn);
 
 #ifdef HAVE_FUTIMENS
-		if (lutimens(ufn, ts) == -1)
+		if (utimensat(AT_FDCWD, ufn, ts,
+		    AT_SYMLINK_NOFOLLOW) == -1)
 			psclog_warn("utimens %s", ufn);
 #else
 		if (lutimes(ufn, tv) == -1)

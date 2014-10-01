@@ -56,6 +56,7 @@ rpc_send_getfile(uint64_t xid, const char *fn)
 	struct iovec iov[2];
 	struct stream *st;
 
+warnx("getfile");
 	memset(&gfq, 0, sizeof(gfq));
 
 	if (opt_recursive)
@@ -100,6 +101,7 @@ rpc_send_putname(const char *fn, const struct stat *stb)
 	struct rpc_putname pn;
 	struct iovec iov[2];
 	struct stream *st;
+warnx("putname");
 
 	memset(&pn, 0, sizeof(pn));
 	pn.pstb.dev = stb->st_dev;
@@ -435,9 +437,12 @@ recvthr_main(struct psc_thread *thr)
 	ssize_t rc;
 	void *buf;
 
+warnx("RECV");
 	rt = thr->pscthr_private;
 	while (pscthr_run(thr)) {
+warnx("WAIT RECV %d", rt->st->rfd);
 		rc = atomicio_read(rt->st->rfd, &hdr, sizeof(hdr));
+warnx("recv %zd", rc);
 		if (rc == 0)
 			break;
 

@@ -333,9 +333,11 @@ proc_work(struct work *wk)
 {
 	switch (wk->wk_type) {
 	case OPC_GETFILE_REQ:
+warnx("GETFILE %p", wk);
 		rpc_send_getfile(wk->wk_xid, wk->wk_fn);
 		break;
 	case OPC_PUTDATA:
+warnx("PUTDATA %p", wk);
 		if (opt_sparse && !pfl_memchk(wk->wk_fh->base +
 		    wk->wk_off, 0, wk->wk_len))
 			rpc_send_putdata(wk->wk_stb.st_ino, wk->wk_off,
@@ -343,6 +345,7 @@ proc_work(struct work *wk)
 		filehandle_dropref(wk->wk_fh, wk->wk_stb.st_size);
 		break;
 	case OPC_PUTNAME:
+warnx("PUTNAME %p", wk);
 		rpc_send_putname(wk->wk_fn, &wk->wk_stb);
 		break;
 	}
@@ -363,6 +366,7 @@ worker_main(struct psc_thread *thr)
 		if (exit_from_signal)
 			break;
 	}
+	warnx("work done\n");
 }
 
 struct work *
@@ -379,7 +383,7 @@ work_getitem(int type)
 }
 
 void
-enqueue(int is_fetch, const char *srcfn, const char *dstfn,
+enqueue(int mode, const char *srcfn, const char *dstfn,
     const struct stat *stb)
 {
 	struct filehandle *fh;
@@ -388,7 +392,7 @@ enqueue(int is_fetch, const char *srcfn, const char *dstfn,
 	size_t blksz;
 
 	/* fetching */
-	if (is_fetch) {
+	if (mode == MODE_FETCH) {
 		wk = work_getitem(OPC_GETFILE_REQ);
 		wk->wk_xid = psc_atomic32_inc_getnew(&psync_xid);
 		xm_insert(wk->wk_xid, dstfn);
@@ -444,8 +448,8 @@ enqueue(int is_fetch, const char *srcfn, const char *dstfn,
 }
 
 int
-walk_cb(const char *fn, const struct stat *stb, __unusedx int type,
-    __unusedx int level, void *arg)
+push_putfile_walkcb(const char *fn, const struct stat *stb,
+    __unusedx int type, __unusedx int level, void *arg)
 {
 	const char *dstprefix = arg;
 	char dstfn[PATH_MAX];
@@ -467,13 +471,13 @@ walk_cb(const char *fn, const struct stat *stb, __unusedx int type,
 
 	snprintf(dstfn, sizeof(dstfn), "%s/%s",
 	    dstprefix ? dstprefix : ".", fn);
-	enqueue(0, fn, dstfn, stb);
+	enqueue(MODE_PUT, fn, dstfn, stb);
 
 	return (rc);
 }
 
 int
-walkfiles(const char *srcfn, int flags, const char *dstfn)
+walkfiles(int mode, const char *srcfn, int flags, const char *dstfn)
 {
 	const char *p;
 
@@ -486,17 +490,15 @@ walkfiles(const char *srcfn, int flags, const char *dstfn)
 	 *
 	 * psync rem1:fn ... rem2:fn2
 	 */
-	p = strchr(dstfn, ':');
-	if (p) {
-		p++;
-
-		/* put */
+	if (mode == MODE_PUT) {
+		/* get */
 		pfl_filewalk(srcfn, flags, NULL, walk_cb,
 		    (void *)(*p ? p : pfl_basename(srcfn)));
 	} else {
-		/* get */
-		enqueue(1, srcfn[0] ? srcfn : pfl_basename(dstfn),
-		    dstfn, NULL);
+		/* put */
+warnx("DSTFN %s\n", dstfn);
+		enqueue(MODE_PUT, srcfn[0] ? srcfn :
+		    pfl_basename(dstfn), dstfn, NULL);
 	}
 	return (0);
 }
@@ -638,6 +640,8 @@ fromfile(const char *fromfn, int flags, const char *dstfn)
 int
 puppet_mode(void)
 {
+	struct psc_thread *thr;
+	struct recvthr *rt;
 	struct stream *st;
 
 	signal(SIGINT, handle_signal);
@@ -646,7 +650,12 @@ puppet_mode(void)
 	st = stream_create(STDIN_FILENO, STDOUT_FILENO);
 	psc_dynarray_add(&streams, st);
 
-	recvthr_main(pscthr_get());
+	/* XXX hack */
+	thr = pscthr_get();
+	rt = thr->pscthr_private = PSCALLOC(sizeof(*rt));
+	rt->st = st;
+
+	recvthr_main(thr);
 
 	fcache_destroy();
 	return (0);
@@ -671,10 +680,6 @@ main(int argc, char *argv[])
 	setenv("PSC_LOG_FORMAT", "%n: ", 0);
 	setenv("PSC_LOG_LEVEL", "warn", 0);
 #endif
-
-for (i=0; i < argc; i++)
-  fprintf(stderr, "[%s] ", argv[i]);
-fprintf(stderr, "\n");
 
 	pfl_init();
 	progname = argv[0];

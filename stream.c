@@ -27,6 +27,7 @@ atomicio(int op, int fd, void *buf, size_t len)
 	ssize_t rc;
 
 	for (; rem > 0; rem -= rc, p += rc) {
+warnx("OP %s: %zd\n", IOP_READ== op?"read":"write", rem);
 		if (op == IOP_READ)
 			rc = read(fd, p, rem);
 		else
@@ -69,12 +70,14 @@ stream_sendxv(struct stream *st, uint64_t xid, int opc,
 	else
 		hdr.xid = psc_atomic32_inc_getnew(&psync_xid);
 
+warnx("rpc %zd %u", sizeof(hdr), hdr.msglen);
 	atomicio_write(st->wfd, &hdr, sizeof(hdr));
-	for (i = 0; i < nio; i++)
+	for (i = 0; i < nio; i++) {
+warnx("  - body %zd", iov[i].iov_len);
 		atomicio_write(st->wfd, iov[i].iov_base,
 		    iov[i].iov_len);
 }
-
+}
 void
 stream_sendx(struct stream *st, uint64_t xid, int opc, void *p,
     size_t len)
@@ -95,20 +98,16 @@ stream_release(struct stream *st)
 struct stream *
 stream_cmdopen(const char *fmt, ...)
 {
-	int rc, rfds[2], wfds[2];
+	int rc, rfd[2], wfd[2];
 	char *cmd, **cmdv;
 	va_list ap;
 
-	rc = socketpair(AF_LOCAL, SOCK_STREAM, PF_UNSPEC, rfds);
-	if (rc == -1)
-		err(1, "socketpair");
+	if (pipe(rfd) == -1)
+		err(1, "pipe");
+	if (pipe(wfd) == -1)
+		err(1, "pipe");
 
-	rc = socketpair(AF_LOCAL, SOCK_STREAM, PF_UNSPEC, wfds);
-	if (rc == -1)
-		err(1, "socketpair");
-
-	rc = fork();
-	switch (rc) {
+	switch (fork()) {
 	case -1:
 		err(1, "fork");
 	case 0:
@@ -117,14 +116,22 @@ stream_cmdopen(const char *fmt, ...)
 		va_end(ap);
 		cmdv = str_split(cmd);
 
-		if (dup2(rfds[1], 0) == -1)
+		close(rfd[0]);
+		close(wfd[1]);
+		if (dup2(wfd[0], 0) == -1)
 			err(1, "dup2");
-		if (dup2(wfds[1], 1) == -1)
+		if (dup2(rfd[1], 1) == -1)
 			err(1, "dup2");
+//char *c2[] = {"cat",NULL};
+	//cmdv = c2;
+warnx("DUP %d -> %d", wfd[0], 0);
+warnx("DUP %d -> %d", rfd[1], 1);
 		execvp(cmdv[0], cmdv);
 		err(1, "exec %s", cmd);
 	default:
-		return (stream_create(rfds[0], wfds[0]));
+		close(rfd[1]);
+		close(wfd[0]);
+		return (stream_create(rfd[0], wfd[1]));
 	}
 }
 

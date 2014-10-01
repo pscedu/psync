@@ -144,10 +144,10 @@ fcache_init(void)
 	 * To saturate a 100Gb/sec pipe with 4k files, we need
 	 * to send about 3 million in parallel...
 	 */
-	psc_hashtbl_init(&fcache, 0, struct file, fid, hentry, 191, NULL,
-	    "fcache");
-	psc_hashtbl_init(&xmcache, 0, struct xid_mapping, xid, hentry, 191,
-	    NULL, "xmcache");
+	psc_hashtbl_init(&fcache, 0, struct file, fid, hentry, 191,
+	    NULL, "fcache");
+	psc_hashtbl_init(&xmcache, 0, struct xid_mapping, xid, hentry,
+	    191, NULL, "xmcache");
 }
 
 int

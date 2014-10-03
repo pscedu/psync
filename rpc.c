@@ -96,12 +96,12 @@ rpc_send_putdata(uint64_t fid, off_t off, const void *buf, size_t len)
 }
 
 void
-rpc_send_putname(const char *fn, const struct stat *stb)
+rpc_send_putname(const char *dir, const char *fn,
+    const struct stat *stb)
 {
 	struct rpc_putname pn;
-	struct iovec iov[2];
+	struct iovec iov[3];
 	struct stream *st;
-warnx("putname");
 
 	memset(&pn, 0, sizeof(pn));
 	pn.pstb.dev = stb->st_dev;
@@ -118,8 +118,11 @@ warnx("putname");
 	iov[0].iov_base = &pn;
 	iov[0].iov_len = sizeof(pn);
 
-	iov[1].iov_base = (void *)fn;
-	iov[1].iov_len = strlen(fn) + 1;
+	iov[1].iov_base = (void *)dir;
+	iov[1].iov_len = pn.dirlen = strlen(dir) + 1;	// up to PATH_MAX
+
+	iov[2].iov_base = (void *)fn;
+	iov[2].iov_len = strlen(fn) + 1;		// up to NAME_MAX
 
 	st = stream_get();
 	stream_sendv(st, OPC_PUTNAME, iov, nitems(iov));
@@ -134,15 +137,22 @@ rpc_handle_getfile_req(struct hdr *h, void *buf)
 	struct rpc_getfile_req *gfq = buf;
 	struct rpc_getfile_rep gfp;
 	struct stream *st;
+	struct walkarg wa;
 	size_t end;
+	int flags;
 
 	end = LASTFIELDLEN(h, struct rpc_getfile_req);
 	// assert(end > 0)
 	gfq->fn[end - 1] = '\0';
 
-	gfp.rc = pfl_filewalk(gfq->fn, gfq->flags &
-	    RPC_GETFILE_F_RECURSE ? PFL_FILEWALKF_RECURSIVE : 0,
-	    NULL, walk_cb, NULL);
+	wa.trim = strlen(gfq->fn);
+	wa.prefix = NULL;
+
+	flags = PFL_FILEWALKF_RELPATH;
+	if (opt_recursive)
+		flags |= PFL_FILEWALKF_RECURSIVE;
+	gfp.rc = pfl_filewalk(gfq->fn, flags, NULL, push_putfile_walkcb,
+	    &wa);
 
 	st = stream_get();
 	stream_send(st, OPC_GETFILE_REP, &gfp, sizeof(gfp));
@@ -165,24 +175,27 @@ rpc_handle_putdata(struct hdr *h, void *buf)
 {
 	struct rpc_putdata *pd = buf;
 	ssize_t rc;
+	size_t len;
 	int fd;
 
 #if 0
 	if (h->msglen == 0 ||
 	    h->msglen > MAX_BUFSZ) {
-		psclog_warn("invalid msglen");
+		pflog_warn("invalid msglen");
 		return;
 	}
 #endif
 
+	len = h->msglen - sizeof(*pd);
+
 	fd = fcache_search(pd->fid);
-	rc = pwrite(fd, pd->data, h->msglen, pd->off);
-	if (rc != h->msglen)
+	rc = pwrite(fd, pd->data, len, pd->off);
+	if (rc != len)
 		err(1, "write");
 }
 
 void
-rpc_handle_checkzero(struct hdr *h, void *buf)
+rpc_handle_checkzero_req(struct hdr *h, void *buf)
 {
 	struct rpc_checkzero_req *czq = buf;
 	struct rpc_checkzero_rep czp;
@@ -215,7 +228,16 @@ rpc_handle_checkzero(struct hdr *h, void *buf)
 }
 
 void
-rpc_handle_getcksum(struct hdr *h, void *buf)
+rpc_handle_checkzero_rep(struct hdr *h, void *buf)
+{
+	struct rpc_checkzero_rep *czp = buf;
+
+	(void)h;
+	(void)czp;
+}
+
+void
+rpc_handle_getcksum_req(struct hdr *h, void *buf)
 {
 	struct buf *bp;
 	struct rpc_getcksum_req *gcq = buf;
@@ -255,6 +277,15 @@ rpc_handle_getcksum(struct hdr *h, void *buf)
 	stream_release(st);
 }
 
+void
+rpc_handle_getcksum_rep(struct hdr *h, void *buf)
+{
+	struct rpc_getcksum_rep *gcp = buf;
+
+	(void)h;
+	(void)gcp;
+}
+
 /*
  * Apply substitution on filename received.
  */
@@ -274,35 +305,48 @@ userfn_subst(uint64_t xid, const char *fn)
 void
 rpc_handle_putname(struct hdr *h, void *buf)
 {
+	char objfn[PATH_MAX], ufn_buf[PATH_MAX];
+	const char *ufn, *dir, *base, *orig_ufn;
 	struct rpc_putname *pn = buf;
 	struct timespec ts[2];
 	struct timeval tv[2];
-	char objfn[PATH_MAX];
-	const char *ufn;
+	struct stat stb;
 	int fd = -1;
 
+	// if (pn->dirlen > )
+	//  EINVAL;
+
+	orig_ufn = dir = pn->dir;
+	base = pn->dir + pn->dirlen;
+
+	if (stat(dir, &stb) == 0 && S_ISDIR(stb.st_mode)) {
+		snprintf(ufn_buf, sizeof(ufn_buf), "%s/%s", dir, base);
+		orig_ufn = ufn_buf;
+	}
+
 	/* apply incoming name substitutions */
-	ufn = userfn_subst(h->xid, pn->fn);
+	ufn = userfn_subst(h->xid, orig_ufn);
 
 	if (S_ISCHR(pn->pstb.mode) ||
 	    S_ISBLK(pn->pstb.mode)) {
 		if (mknod(ufn, pn->pstb.mode, pn->pstb.rdev) == -1) {
-			psclog_warn("mknod %s", ufn);
+			pflog_warn("mknod %s", ufn);
 			return;
 		}
 	} else if (S_ISDIR(pn->pstb.mode)) {
 		if (mkdir(ufn, pn->pstb.mode) == -1) {
-			psclog_warn("mkdir %s", ufn);
+			pflog_warn("mkdir %s", ufn);
 			return;
 		}
 	} else if (S_ISFIFO(pn->pstb.mode)) {
 		if (mkfifo(ufn, pn->pstb.mode) == -1) {
-			psclog_warn("mkfifo %s", ufn);
+			pflog_warn("mkfifo %s", ufn);
 			return;
 		}
 	} else if (S_ISLNK(pn->pstb.mode)) {
+		objns_makepath(objfn, pn->fid);
 		if (symlink(objfn, ufn) == -1) {
-			psclog_warn("symlink %s", ufn);
+			pflog_warn("symlink %s", ufn);
 			return;
 		}
 	} else if (S_ISSOCK(pn->pstb.mode)) {
@@ -310,7 +354,7 @@ rpc_handle_putname(struct hdr *h, void *buf)
 
 		fd = socket(AF_LOCAL, SOCK_STREAM, PF_UNSPEC);
 		if (fd == -1) {
-			psclog_warn("socket %s", ufn);
+			pflog_warn("socket %s", ufn);
 			return;
 		}
 		memset(&sun, 0, sizeof(sun));
@@ -320,26 +364,29 @@ rpc_handle_putname(struct hdr *h, void *buf)
 		if (bind(fd, (struct sockaddr *)&sun,
 		    sizeof(sun)) == -1) {
 			close(fd);
-			psclog_warn("bind %s", ufn);
+			pflog_warn("bind %s", ufn);
 			return;
 		}
 		close(fd);
 		fd = -1;
 	} else if (S_ISREG(pn->pstb.mode)) {
 		objns_makepath(objfn, pn->fid);
+warnx("objfn %s", objfn);
 		fd = open(objfn, O_CREAT | O_RDWR, 0600);
 		if (fd == -1) {
-			psclog_warn("open %s", ufn);
+			pflog_warn("open %s", ufn);
 			return;
 		}
+warnx("ln %s -> %s", ufn, objfn);
 		if (link(objfn, ufn) == -1) {
-			psclog_warn("chown %s", ufn);
+			pflog_warn("link %s", ufn);
 			return;
 		}
-		if (ftruncate(fd, pn->pstb.size) == -1)
-			psclog_warn("chown %s", ufn);
 
 		fcache_insert(pn->fid, fd);
+	} else {
+		pflog_warn("invalid mode %#o", pn->pstb.mode);
+		return;
 	}
 
 #ifdef HAVE_FUTIMENS
@@ -365,35 +412,35 @@ rpc_handle_putname(struct hdr *h, void *buf)
 
 	if (fd == -1) {
 		if (lchown(ufn, pn->pstb.uid, pn->pstb.gid) == -1)
-			psclog_warn("chown %s", ufn);
+			pflog_warn("chown %s", ufn);
 		if (lchmod(ufn, pn->pstb.mode) == -1)
-			psclog_warn("chmod %s", ufn);
+			pflog_warn("chmod %s", ufn);
 
 #ifdef HAVE_FUTIMENS
 		if (utimensat(AT_FDCWD, ufn, ts,
 		    AT_SYMLINK_NOFOLLOW) == -1)
-			psclog_warn("utimens %s", ufn);
+			pflog_warn("utimens %s", ufn);
 #else
 		if (lutimes(ufn, tv) == -1)
-			psclog_warn("utimes %s", ufn);
+			pflog_warn("utimes %s", ufn);
 #endif
 
 	} else {
 		if (fchown(fd, pn->pstb.uid, pn->pstb.gid) == -1)
-			psclog_warn("chown %s", ufn);
+			pflog_warn("chown %s", ufn);
 		if (fchmod(fd, pn->pstb.mode) == -1)
-			psclog_warn("chmod %s", ufn);
+			pflog_warn("chmod %s", ufn);
 
 #ifdef HAVE_FUTIMENS
 		struct timespec ts[2];
 
 		if (futimens(fd, ts) == -1)
-			psclog_warn("utimens %s", ufn);
+			pflog_warn("utimens %s", ufn);
 #else
 		struct timeval tv[2];
 
 		if (futimes(fd, tv) == -1)
-			psclog_warn("utimes %s", ufn);
+			pflog_warn("utimes %s", ufn);
 #endif
 	}
 }
@@ -416,8 +463,10 @@ op_handler_t ops[] = {
 	rpc_handle_getfile_req,
 	rpc_handle_getfile_rep,
 	rpc_handle_putdata,
-	rpc_handle_checkzero,
-	rpc_handle_getcksum,
+	rpc_handle_checkzero_req,
+	rpc_handle_checkzero_rep,
+	rpc_handle_getcksum_req,
+	rpc_handle_getcksum_rep,
 	rpc_handle_putname,
 	rpc_handle_ctl
 };
@@ -431,18 +480,15 @@ handle_signal(__unusedx int sig)
 void
 recvthr_main(struct psc_thread *thr)
 {
+	struct hdr hdr;
 	struct recvthr *rt;
 	uint32_t bufsz = 0;
-	struct hdr hdr;
+	void *buf = NULL;
 	ssize_t rc;
-	void *buf;
 
-warnx("RECV");
 	rt = thr->pscthr_private;
 	while (pscthr_run(thr)) {
-warnx("WAIT RECV %d", rt->st->rfd);
 		rc = atomicio_read(rt->st->rfd, &hdr, sizeof(hdr));
-warnx("recv %zd", rc);
 		if (rc == 0)
 			break;
 
@@ -468,4 +514,7 @@ warnx("recv %zd", rc);
 		if (exit_from_signal)
 			break;
 	}
+	close(rt->st->rfd);
+	close(rt->st->wfd);
+warnx("[%d] RECV exit", psync_is_master);
 }

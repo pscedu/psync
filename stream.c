@@ -27,11 +27,12 @@ atomicio(int op, int fd, void *buf, size_t len)
 	ssize_t rc;
 
 	for (; rem > 0; rem -= rc, p += rc) {
-warnx("OP %s: %zd\n", IOP_READ== op?"read":"write", rem);
 		if (op == IOP_READ)
 			rc = read(fd, p, rem);
 		else
 			rc = write(fd, p, rem);
+		if (rc == 0)
+			break;
 		if (rc == -1) {
 			if (errno != EINTR)
 				err(1, "%s", op == IOP_READ ?
@@ -70,13 +71,10 @@ stream_sendxv(struct stream *st, uint64_t xid, int opc,
 	else
 		hdr.xid = psc_atomic32_inc_getnew(&psync_xid);
 
-warnx("rpc %zd %u", sizeof(hdr), hdr.msglen);
 	atomicio_write(st->wfd, &hdr, sizeof(hdr));
-	for (i = 0; i < nio; i++) {
-warnx("  - body %zd", iov[i].iov_len);
+	for (i = 0; i < nio; i++)
 		atomicio_write(st->wfd, iov[i].iov_base,
 		    iov[i].iov_len);
-}
 }
 void
 stream_sendx(struct stream *st, uint64_t xid, int opc, void *p,
@@ -98,7 +96,7 @@ stream_release(struct stream *st)
 struct stream *
 stream_cmdopen(const char *fmt, ...)
 {
-	int rc, rfd[2], wfd[2];
+	int rfd[2], wfd[2];
 	char *cmd, **cmdv;
 	va_list ap;
 

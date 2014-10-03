@@ -34,8 +34,8 @@ struct rpc_sub_stat {
 
 struct rpc_generic_rep {
 	uint64_t		xid;
-	int32_t			rc;
-	int32_t			_pad;
+	 int32_t		rc;
+	 int32_t		_pad;
 };
 
 struct rpc_getfile_req {
@@ -77,15 +77,19 @@ struct rpc_getcksum_rep {
 struct rpc_putname {
 	struct rpc_sub_stat	pstb;
 	uint64_t		fid;
-	char			fn[0];
+	 int32_t		dirlen;
+	 int32_t		_pad;
+	char			dir[0];
 };
+/* followed by file basename */
+	char			fn[0];
 
 struct rpc_ctl {
 };
 
 void rpc_send_getfile(uint64_t, const char *);
 void rpc_send_putdata(uint64_t, off_t, const void *, size_t);
-void rpc_send_putname(const char *, const struct stat *);
+void rpc_send_putname(const char *, const char *, const struct stat *);
 
 void handle_signal(int);
 

@@ -52,6 +52,11 @@ struct buf {
 	size_t			 len;
 };
 
+struct walkarg {
+	const char *prefix;
+	int trim;
+};
+
 #define push(da, ent)							\
 	do {								\
 		if (psc_dynarray_add((da), (ent)))			\
@@ -95,12 +100,12 @@ struct stream	*stream_create(int, int);
 struct stream	*stream_get(void);
 void		 stream_release(struct stream *);
 void		 stream_sendx(struct stream *, uint64_t, int, void *,
-			size_t);
+		    size_t);
 void		 stream_sendxv(struct stream *, uint64_t, int,
-			struct iovec *, int);
+		    struct iovec *, int);
 
-int		 walk_cb(const char *, const struct stat *, int, int,
-			void *);
+int		 push_putfile_walkcb(const char *, const struct stat *,
+		    int, int, void *);
 
 extern struct psc_hashtbl	 fcache;
 extern struct psc_hashtbl	 xmcache;
@@ -111,6 +116,7 @@ extern int			 objns_depth;
 extern volatile sig_atomic_t	 exit_from_signal;
 
 extern psc_atomic32_t		 psync_xid;
+extern int			 psync_is_master;
 
 extern int			 opt_recursive;
 extern int			 opt_streams;

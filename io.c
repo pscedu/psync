@@ -96,7 +96,6 @@ _fcache_search(uint64_t fid, int fd)
 		goto out;
 
 	b = psc_hashbkt_get(&fcache, &fid);
-	psc_hashbkt_lock(b);
 	f = psc_hashbkt_search(&fcache, b, NULL, NULL, &fid);
 	if (f == NULL) {
 		f = PSCALLOC(sizeof(*f));
@@ -118,7 +117,8 @@ _fcache_search(uint64_t fid, int fd)
 
 		psc_hashbkt_add_item(&fcache, b, f);
 	}
-	psc_hashbkt_unlock(b);
+	psc_hashbkt_put(&fcache, b);
+
  out:
 	if (fd != -1)
 		close(fd);

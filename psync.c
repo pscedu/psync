@@ -408,47 +408,13 @@ work_getitem(int type)
  * @stb: stat(2) buffer only used during PUTs.
  */
 void
-enqueue(int mode, const char *srcfn, const char *orig_dstfn,
+enqueue_put(int mode, const char *srcfn, const char *orig_dstfn,
     const struct stat *stb)
 {
 	struct filehandle *fh;
 	struct work *wk;
 	off_t off = 0;
 	size_t blksz;
-
-	/* fetching */
-	if (mode == MODE_GET) {
-		char dstfn_buf[PATH_MAX];
-		const char *dstfn;
-		struct stat tstb;
-
-		/*
-		 * If destination is local and a directory, append
-		 * remote source filename.
-		 *
-		 *	psync remote:file file
-		 *	psync remote:file dir
-		 *	psync remote:dir file
-		 *	psync remote:dir dir
-		 */
-		dstfn = orig_dstfn;
-		if (stat(orig_dstfn, &tstb) == 0 &&
-		    S_ISDIR(tstb.st_mode)) {
-			snprintf(dstfn_buf, sizeof(dstfn_buf), "%s/%s",
-			    dstfn, pfl_basename(srcfn));
-			dstfn = dstfn_buf;
-		}
-
-		wk = work_getitem(OPC_GETFILE_REQ);
-		wk->wk_xid = psc_atomic32_inc_getnew(&psync_xid);
-dbglog("MAP %lx -> %s", wk->wk_xid, dstfn);
-		xm_insert(wk->wk_xid, dstfn);
-		strlcpy(wk->wk_fn, srcfn, sizeof(wk->wk_fn));
-		// if (!opt_partial)
-		// truncate(dstfn, 0);
-		lc_add(&workq, wk);
-		return;
-	}
 
 	blksz = opt_block_size ? (blksize_t)opt_block_size :
 	    stb->st_blksize;
@@ -460,7 +426,7 @@ dbglog("MAP %lx -> %s", wk->wk_xid, dstfn);
 	    sizeof(wk->wk_basefn));
 dbglog("DSTFN %s", wk->wk_basefn);
 	strlcpy(wk->wk_fn, orig_dstfn, sizeof(wk->wk_fn));
-dbglog("ORIG DSTFN %s", wk->wk_fn);
+dbglog("DSTDIR %s", wk->wk_fn);
 	lc_add(&workq, wk);
 
 	// S_ISREG()
@@ -539,14 +505,16 @@ push_putfile_walkcb(const char *fn, const struct stat *stb,
 #endif
 
 	if (wa->prefix) {
+dbglog("fn %s", fn);
 		snprintf(dstfn_buf, sizeof(dstfn_buf), "%s/%s",
 		    wa->prefix, fn + wa->trim);
 		p = strrchr(dstfn_buf, '/');
 		*p = '\0';
 		dstfn = dstfn_buf;
+dbglog("PUT %s -> %s [%s]", fn, dstfn, wa->prefix);
 	} else
 		dstfn = fn;
-	enqueue(MODE_PUT, fn, dstfn, stb);
+	enqueue_put(MODE_PUT, fn, dstfn, stb);
 	return (rc);
 }
 
@@ -565,17 +533,46 @@ push_putfile_walkcb(const char *fn, const struct stat *stb,
 int
 walkfiles(int mode, const char *srcfn, int flags, const char *dstfn)
 {
+	char buf[PATH_MAX];
+	const char *finalfn;
+	struct stat tstb;
+	struct work *wk;
+
 	if (mode == MODE_PUT) {
 		struct walkarg wa;
 
 		wa.trim = strlen(srcfn);
 		wa.prefix = dstfn;
-		pfl_filewalk(srcfn, flags, NULL, push_putfile_walkcb,
-		    &wa);
-	} else {
-warnx("WALK GET dstfn=%s", dstfn);
-		enqueue(mode, srcfn, dstfn, NULL);
+		return (pfl_filewalk(srcfn, flags, NULL,
+		    push_putfile_walkcb, &wa));
 	}
+
+	/* otherwise, the operation is a FETCH */
+
+	/*
+	 * If destination is local and a directory, append
+	 * remote source filename.
+	 *
+	 *	psync remote:file file
+	 *	psync remote:file dir
+	 *	psync remote:dir file
+	 *	psync remote:dir dir
+	 */
+	finalfn = dstfn;
+	if (stat(dstfn, &tstb) == 0 && S_ISDIR(tstb.st_mode)) {
+		snprintf(buf, sizeof(buf), "%s/%s", finalfn,
+		    pfl_basename(srcfn));
+		finalfn = buf;
+	}
+
+	wk = work_getitem(OPC_GETFILE_REQ);
+	wk->wk_xid = psc_atomic32_inc_getnew(&psync_xid);
+dbglog("MAP %lx -> %s", wk->wk_xid, finalfn);
+	strlcpy(wk->wk_fn, srcfn, sizeof(wk->wk_fn));
+//	if (!opt_partial)
+//		truncate(finalfn, 0);
+	lc_add(&workq, wk);
+
 	return (0);
 }
 

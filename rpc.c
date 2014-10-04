@@ -8,6 +8,7 @@
 
 #include <fcntl.h>
 #include <gcrypt.h>
+#include <pwd.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -134,6 +135,7 @@ rpc_handle_getfile_req(struct hdr *h, void *buf)
 	struct rpc_getfile_rep gfp;
 	struct stream *st;
 	struct walkarg wa;
+	struct stat stb;
 	size_t end;
 	int flags;
 
@@ -141,14 +143,22 @@ rpc_handle_getfile_req(struct hdr *h, void *buf)
 	// assert(end > 0)
 	gfq->fn[end - 1] = '\0';
 
-	wa.trim = strlen(gfq->fn);
-	wa.prefix = NULL;
+	if (stat(gfq->fn, &stb) == 0) {
+		flags = PFL_FILEWALKF_RELPATH;
 
-	flags = PFL_FILEWALKF_RELPATH;
-	if (opt_recursive)
-		flags |= PFL_FILEWALKF_RECURSIVE;
-	gfp.rc = pfl_filewalk(gfq->fn, flags, NULL, push_putfile_walkcb,
-	    &wa);
+		wa.trim = strlen(gfq->fn);
+		if (S_ISDIR(stb.st_mode) && opt_recursive) {
+			flags |= PFL_FILEWALKF_RECURSIVE;
+			wa.prefix = NULL;
+		} else {
+			wa.prefix = NULL; // gfq->fn
+		}
+
+		gfp.rc = pfl_filewalk(gfq->fn, flags, NULL,
+		    push_putfile_walkcb, &wa);
+	} else {
+		gfp.rc = errno;
+	}
 
 	st = stream_get();
 	stream_send(st, OPC_GETFILE_REP, &gfp, sizeof(gfp));
@@ -186,7 +196,7 @@ rpc_handle_putdata(struct hdr *h, void *buf)
 
 	fd = fcache_search(pd->fid);
 	rc = pwrite(fd, pd->data, len, pd->off);
-	if (rc != len)
+	if (rc != (ssize_t)len)
 		err(1, "write");
 }
 
@@ -286,16 +296,58 @@ rpc_handle_getcksum_rep(struct hdr *h, void *buf)
  * Apply substitution on filename received.
  */
 const char *
-userfn_subst(uint64_t xid, const char *fn)
+userfn_subst(const char *fn)
 {
-	struct xid_mapping *xm;
+	struct psc_thread *thr;
+	struct recvthr *rt;
+	const char *s = fn;
+	char *t;
 
-	/* if there is a direct substitution for this xid, use it */
-	xm = psc_hashtbl_search(&xmcache, NULL, NULL, &xid);
-	if (xm)
-		return (xm->fn);
+	thr = pscthr_get();
+	rt = thr->pscthr_private;
+	t = rt->fnbuf;
+	if (*s == '~') {
+		struct passwd pw, *res = NULL;
+		int bufsz, rc;
+		char *pwbuf;
 
-	return (fn);
+		bufsz = sysconf(_SC_GETPW_R_SIZE_MAX);
+		if (bufsz == -1)
+			err(1, "sysconf");
+
+		pwbuf = PSCALLOC(bufsz);
+
+		s++;
+		if (*s == '/' || *s == '\0') {
+			/* expand current user */
+			getpwuid_r(geteuid(), &pw, pwbuf, bufsz, &res);
+		} else {
+			size_t len;
+			char *nam;
+
+			/* expand specified user */
+			do
+				s++;
+			while (*s && *s != '/');
+
+			len = s - fn;
+			nam = PSCALLOC(len + 1);
+			strncpy(nam, fn, len);
+			nam[len] = '\0';
+			getpwnam_r(nam, &pw, pwbuf, bufsz, &res);
+			PSCFREE(nam);
+		}
+		if (res && (rc = snprintf(rt->fnbuf, sizeof(rt->fnbuf),
+		    "%s", res->pw_dir)) != -1)
+			t += rc;
+		else
+			s = fn;
+		PSCFREE(pwbuf);
+	}
+	for (; *s && t < rt->fnbuf + sizeof(rt->fnbuf) - 1; s++, t++)
+		*t = *s;
+	*t = '\0';
+	return (rt->fnbuf);
 }
 
 void
@@ -321,7 +373,7 @@ rpc_handle_putname(struct hdr *h, void *buf)
 	}
 
 	/* apply incoming name substitutions */
-	ufn = userfn_subst(h->xid, orig_ufn);
+	ufn = userfn_subst(orig_ufn);
 dbglog("USERFN [%lx] %s -> %s", h->xid, orig_ufn, ufn);
 
 	if (S_ISCHR(pn->pstb.mode) ||

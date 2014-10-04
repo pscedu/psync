@@ -18,7 +18,6 @@
 #include "psync.h"
 
 struct psc_hashtbl	 fcache;
-struct psc_hashtbl	 xmcache;
 
 void
 objns_create(void)
@@ -71,18 +70,6 @@ objns_makepath(char *fn, uint64_t fid)
 		err(1, "mkdir %s", fn);
 
 	snprintf(p, PATH_MAX - (p - fn), "%016"PRIx64, fid);
-}
-
-void
-xm_insert(uint64_t xid, const char *fn)
-{
-	struct xid_mapping *xm;
-
-	xm = PSCALLOC(sizeof(*xm));
-	psc_hashent_init(&xmcache, xm);
-	xm->xid = xid;
-	xm->fn = pfl_strdup(fn);
-	psc_hashtbl_add_item(&xmcache, xm);
 }
 
 int
@@ -146,8 +133,6 @@ fcache_init(void)
 	 */
 	psc_hashtbl_init(&fcache, 0, struct file, fid, hentry, 191,
 	    NULL, "fcache");
-	psc_hashtbl_init(&xmcache, 0, struct xid_mapping, xid, hentry,
-	    191, NULL, "xmcache");
 }
 
 int

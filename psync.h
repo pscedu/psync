@@ -23,6 +23,7 @@ struct stream {
 
 struct recvthr {
 	struct stream		*st;
+	char			 fnbuf[PATH_MAX];
 };
 
 struct file {
@@ -79,8 +80,6 @@ char	**str_split(char *);
 int	  parsenum(int *, const char *, int, int);
 int	  parsesize(uint64_t *, const char *, uint64_t);
 
-void	  xm_insert(uint64_t, const char *);
-
 void	  recvthr_main(struct psc_thread *);
 
 void	  objns_makepath(char *, uint64_t);
@@ -114,7 +113,6 @@ int		 push_putfile_walkcb(const char *, const struct stat *,
 		    int, int, void *);
 
 extern struct psc_hashtbl	 fcache;
-extern struct psc_hashtbl	 xmcache;
 
 extern char			 objns_path[PATH_MAX];
 extern int			 objns_depth;

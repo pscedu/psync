@@ -6,6 +6,8 @@
 
 #define PSYNC_VERSION "1.0"
 
+#include <signal.h>
+
 #include "pfl/hashtbl.h"
 #include "pfl/pthrutil.h"
 

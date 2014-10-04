@@ -48,7 +48,6 @@ buf_get(size_t len)
 
 #define buf_release(b)	psc_pool_return(buf_pool, (b))
 
-
 void
 rpc_send_getfile(uint64_t xid, const char *fn)
 {
@@ -56,17 +55,14 @@ rpc_send_getfile(uint64_t xid, const char *fn)
 	struct iovec iov[2];
 	struct stream *st;
 
-warnx("getfile");
 	memset(&gfq, 0, sizeof(gfq));
-
-	if (opt_recursive)
-		gfq.flags = RPC_GETFILE_F_RECURSE;
 
 	iov[0].iov_base = &gfq;
 	iov[0].iov_len = sizeof(gfq);
 
 	iov[1].iov_base = (void *)fn;
 	iov[1].iov_len = strlen(fn) + 1;
+dbglog("SEND GETFILE %lx", xid);
 
 	st = stream_get();
 	stream_sendxv(st, xid, OPC_GETFILE_REQ, iov, nitems(iov));
@@ -326,6 +322,7 @@ rpc_handle_putname(struct hdr *h, void *buf)
 
 	/* apply incoming name substitutions */
 	ufn = userfn_subst(h->xid, orig_ufn);
+dbglog("USERFN [%lx] %s -> %s", h->xid, orig_ufn, ufn);
 
 	if (S_ISCHR(pn->pstb.mode) ||
 	    S_ISBLK(pn->pstb.mode)) {
@@ -508,13 +505,12 @@ recvthr_main(struct psc_thread *thr)
 
 		if (exit_from_signal)
 			break;
-
 		ops[hdr.opc](&hdr, buf);
 
 		if (exit_from_signal)
 			break;
 	}
-	close(rt->st->rfd);
-	close(rt->st->wfd);
-warnx("[%d] RECV exit", psync_is_master);
+dbglog("RECV exit");
+dbglog("CLOSE %d\n", rt->st->rfd);
+	//close(rt->st->rfd);
 }

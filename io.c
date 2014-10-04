@@ -93,7 +93,7 @@ _fcache_search(uint64_t fid, int fd)
 
 	f = psc_hashtbl_search(&fcache, NULL, NULL, &fid);
 	if (f)
-		goto out;
+		return (f->fd);
 
 	b = psc_hashbkt_get(&fcache, &fid);
 	f = psc_hashbkt_search(&fcache, b, NULL, NULL, &fid);
@@ -106,20 +106,18 @@ _fcache_search(uint64_t fid, int fd)
 			char fn[PATH_MAX];
 
 			objns_makepath(fn, fid);
-			f->fd = open(fn, O_RDWR | O_CREAT | O_EXCL,
-			    0600);
+			f->fd = open(fn, O_RDWR | O_CREAT, 0600);
 			if (f->fd == -1)
 				err(1, "%s", fn);
 		} else {
 			f->fd = fd;
+			fd = -1;
 		}
-		fd = -1;
 
 		psc_hashbkt_add_item(&fcache, b, f);
 	}
 	psc_hashbkt_put(&fcache, b);
 
- out:
 	if (fd != -1)
 		close(fd);
 	return (f->fd);
@@ -132,7 +130,9 @@ fcache_close(uint64_t fid)
 
 	f = psc_hashtbl_searchdel(&fcache, NULL, &fid);
 	if (f) {
+dbglog("CLOSE %d\n", f->fd);
 		close(f->fd);
+		/* XXX refcnting/race ?? */
 		PSCFREE(f);
 	}
 }
@@ -177,6 +177,7 @@ fcache_destroy(void)
 
 	PSC_HASHTBL_FOREACH_BUCKET(b, &fcache)
 		PSC_HASHBKT_FOREACH_ENTRY_SAFE(&fcache, f, fn, b) {
+dbglog("CLOSE %d\n", f->fd);
 			close(f->fd);
 			psc_hashbkt_del_item(&fcache, b, f);
 			PSCFREE(f);

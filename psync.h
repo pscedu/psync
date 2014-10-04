@@ -63,6 +63,10 @@ struct walkarg {
 			err(1, NULL);					\
 	} while (0)
 
+#define dbglog(fmt, ...)						\
+	psclogs_debug(PSS_TMP, psync_is_master ?			\
+	    "[master] " fmt : "[puppet] " fmt, ##__VA_ARGS__)
+
 #define IOP_READ	0
 #define IOP_WRITE	1
 

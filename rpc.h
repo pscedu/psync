@@ -39,13 +39,12 @@ struct rpc_generic_rep {
 };
 
 struct rpc_getfile_req {
-	uint32_t		flags;		/* see RPC_GETFILE_F_* */
-	uint32_t		_pad;
 	char			fn[0];
+	/*
+	 * Followed by file basename, used if not already specified
+	 * locally.
+	 */
 };
-
-/* rpc_getfile_req flags */
-#define RPC_GETFILE_F_RECURSE	(1 << 0)
 
 #define rpc_getfile_rep rpc_generic_rep
 
@@ -79,10 +78,12 @@ struct rpc_putname {
 	uint64_t		fid;
 	 int32_t		dirlen;
 	 int32_t		_pad;
-	char			dir[0];
+	char			dir[0];	/* might be file */
+	/*
+	 * Followed by file basename, used if not already specified
+	 * locally.
+	 */
 };
-/* followed by file basename */
-	char			fn[0];
 
 struct rpc_ctl {
 };

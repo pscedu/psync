@@ -329,6 +329,7 @@ filehandle_dropref(struct filehandle *fh, size_t len)
 	if (--fh->refcnt == 0 &&
 	    fh->flags & FHF_DONE) {
 		munmap(fh->base, len);
+dbglog("CLOSE %d\n", fh->fd);
 		close(fh->fd);
 		PSCFREE(fh);
 	} else
@@ -340,7 +341,6 @@ proc_work(struct work *wk)
 {
 	switch (wk->wk_type) {
 	case OPC_GETFILE_REQ:
-warnx("GETFILE %p", wk);
 		rpc_send_getfile(wk->wk_xid, wk->wk_fn);
 		break;
 	case OPC_PUTDATA:
@@ -351,7 +351,6 @@ warnx("GETFILE %p", wk);
 		filehandle_dropref(wk->wk_fh, wk->wk_stb.st_size);
 		break;
 	case OPC_PUTNAME:
-warnx("PUTNAME %p", wk);
 		rpc_send_putname(wk->wk_fn, wk->wk_basefn, &wk->wk_stb);
 		break;
 	}
@@ -365,9 +364,11 @@ worker_main(struct psc_thread *thr)
 	struct stream *st;
 	struct work *wk;
 	int i;
+dbglog("init");
 
 	while (pscthr_run(thr)) {
 		wk = lc_getwait(&workq);
+dbglog("proc work");
 		if (wk == NULL)
 			break;
 		wk->wk_cb(wk);
@@ -376,13 +377,16 @@ worker_main(struct psc_thread *thr)
 		if (exit_from_signal)
 			break;
 	}
-
+dbglog("@@@@@@@@@ CLOSE ALL writefds");
 	pthread_barrier_wait(&work_barrier);
 	spinlock(&lock);
 	if (!ran_dtor) {
 		ran_dtor = 1;
 		DYNARRAY_FOREACH(st, i, &streams)
+{
+dbglog("CLOSE %d\n", st->wfd);
 			close(st->wfd);
+}
 	}
 	freelock(&lock);
 }
@@ -418,6 +422,15 @@ enqueue(int mode, const char *srcfn, const char *orig_dstfn,
 		const char *dstfn;
 		struct stat tstb;
 
+		/*
+		 * If destination is local and a directory, append
+		 * remote source filename.
+		 *
+		 *	psync remote:file file
+		 *	psync remote:file dir
+		 *	psync remote:dir file
+		 *	psync remote:dir dir
+		 */
 		dstfn = orig_dstfn;
 		if (stat(orig_dstfn, &tstb) == 0 &&
 		    S_ISDIR(tstb.st_mode)) {
@@ -428,6 +441,7 @@ enqueue(int mode, const char *srcfn, const char *orig_dstfn,
 
 		wk = work_getitem(OPC_GETFILE_REQ);
 		wk->wk_xid = psc_atomic32_inc_getnew(&psync_xid);
+dbglog("MAP %lx -> %s", wk->wk_xid, dstfn);
 		xm_insert(wk->wk_xid, dstfn);
 		strlcpy(wk->wk_fn, srcfn, sizeof(wk->wk_fn));
 		// if (!opt_partial)
@@ -444,9 +458,9 @@ enqueue(int mode, const char *srcfn, const char *orig_dstfn,
 	memcpy(&wk->wk_stb, stb, sizeof(wk->wk_stb));
 	strlcpy(wk->wk_basefn, pfl_basename(srcfn),
 	    sizeof(wk->wk_basefn));
-warnx("DSTFN %s", wk->wk_basefn);
+dbglog("DSTFN %s", wk->wk_basefn);
 	strlcpy(wk->wk_fn, orig_dstfn, sizeof(wk->wk_fn));
-warnx("ORIG DSTFN %s", wk->wk_fn);
+dbglog("ORIG DSTFN %s", wk->wk_fn);
 	lc_add(&workq, wk);
 
 	// S_ISREG()
@@ -556,10 +570,10 @@ walkfiles(int mode, const char *srcfn, int flags, const char *dstfn)
 
 		wa.trim = strlen(srcfn);
 		wa.prefix = dstfn;
-warnx("dstfn %s", dstfn);
 		pfl_filewalk(srcfn, flags, NULL, push_putfile_walkcb,
 		    &wa);
 	} else {
+warnx("WALK GET dstfn=%s", dstfn);
 		enqueue(mode, srcfn, dstfn, NULL);
 	}
 	return (0);
@@ -702,7 +716,7 @@ filesfrom(int mode, const char *fromfn, int flags, const char *dstfn)
 int
 puppet_mode(void)
 {
-	struct psc_thread *thr;
+	struct psc_thread *thr, *wkthr;
 	struct recvthr *rt;
 	struct stream *st;
 
@@ -712,16 +726,17 @@ puppet_mode(void)
 	st = stream_create(STDIN_FILENO, STDOUT_FILENO);
 	psc_dynarray_add(&streams, st);
 
+	wkthr = pscthr_init(THRT_WK, 0, worker_main, NULL, 0, "wkthr");
+
 	/* XXX hack */
 	thr = pscthr_get();
 	rt = thr->pscthr_private = PSCALLOC(sizeof(*rt));
 	rt->st = st;
-
-	pscthr_init(THRT_WK, 0, worker_main, NULL, 0, "wkthr");
-
 	recvthr_main(thr);
 
 	lc_kill(&workq);
+
+	pthread_join(wkthr->pscthr_pthread, NULL);
 
 	fcache_destroy();
 	return (0);
@@ -935,7 +950,7 @@ main(int argc, char *argv[])
 		} else {
 			dstfn = strrchr(p, '/');
 			if (dstfn > p)
-				dstfn[-1] = '\0';
+				*dstfn++ = '\0';
 			else
 				p = NULL;
 		}
@@ -969,6 +984,7 @@ main(int argc, char *argv[])
 
 		/*
 		 * add:
+		 *	-r
 		 *	--sparse
 		 *	--exclude filter patterns
 		 */

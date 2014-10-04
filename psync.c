@@ -32,6 +32,8 @@
 
 #include "pfl/alloc.h"
 #include "pfl/cdefs.h"
+#include "pfl/fmt.h"
+#include "pfl/iostats.h"
 #include "pfl/list.h"
 #include "pfl/listcache.h"
 #include "pfl/log.h"
@@ -64,9 +66,10 @@ struct work {
 };
 
 enum {
+	THRT_DISP,
 	THRT_MAIN,
-	THRT_TIOS,
 	THRT_RECV,
+	THRT_TIOS,
 	THRT_WK
 };
 
@@ -144,7 +147,7 @@ int			 opt_owner;
 int			 opt_partial;
 int			 opt_perms;
 int			 opt_port;
-int			 opt_progress;
+int			 opt_progress = 1;
 int			 opt_prune_empty_dirs;
 int			 opt_puppet;
 int			 opt_quiet;
@@ -173,14 +176,17 @@ struct psc_dynarray	 opt_include = DYNARRAY_INIT;
 struct psc_poolmaster	 buf_poolmaster;
 struct psc_poolmgr	*buf_pool;
 
+struct psc_listcache	 workq;
 struct psc_poolmaster	 work_poolmaster;
 struct psc_poolmgr	*work_pool;
-struct psc_listcache	 workq;
 pthread_barrier_t	 work_barrier;
+
+struct psc_iostats	 iostats;
 
 struct psc_dynarray	 streams = DYNARRAY_INIT;
 
 int			 psync_is_master;	/* otherwise, is RPC puppet */
+int			 psync_finished;
 
 #define NO_ARG		no_argument
 #define REQARG		required_argument
@@ -357,18 +363,15 @@ proc_work(struct work *wk)
 }
 
 void
-worker_main(struct psc_thread *thr)
+wkthr_main(struct psc_thread *thr)
 {
 	static psc_spinlock_t lock = SPINLOCK_INIT;
-	static int ran_dtor;
 	struct stream *st;
 	struct work *wk;
 	int i;
-dbglog("init");
 
 	while (pscthr_run(thr)) {
 		wk = lc_getwait(&workq);
-dbglog("proc work");
 		if (wk == NULL)
 			break;
 		wk->wk_cb(wk);
@@ -380,13 +383,10 @@ dbglog("proc work");
 dbglog("@@@@@@@@@ CLOSE ALL writefds");
 	pthread_barrier_wait(&work_barrier);
 	spinlock(&lock);
-	if (!ran_dtor) {
-		ran_dtor = 1;
+	if (!psync_finished) {
 		DYNARRAY_FOREACH(st, i, &streams)
-{
-dbglog("CLOSE %d\n", st->wfd);
 			close(st->wfd);
-}
+		psync_finished = 1;
 	}
 	freelock(&lock);
 }
@@ -723,7 +723,7 @@ puppet_mode(void)
 	st = stream_create(STDIN_FILENO, STDOUT_FILENO);
 	psc_dynarray_add(&streams, st);
 
-	wkthr = pscthr_init(THRT_WK, 0, worker_main, NULL, 0, "wkthr");
+	wkthr = pscthr_init(THRT_WK, 0, wkthr_main, NULL, 0, "wkthr");
 
 	/* XXX hack */
 	thr = pscthr_get();
@@ -744,6 +744,28 @@ usage(void)
 {
 	fprintf(stderr, "usage: %s src dst\n", progname);
 	exit(1);
+}
+
+void
+dispthr_main(struct psc_thread *thr)
+{
+	char ratebuf[PSCFMT_HUMAN_BUFSIZ];
+	struct psc_waitq wq = PSC_WAITQ_INIT;
+	struct timespec ts;
+	double d;
+
+	PFL_GETTIMESPEC(&ts);
+	ts.tv_nsec = 0;
+	while (!psync_finished) {
+		printf("fioo\n");
+		ts.tv_sec++;
+		psc_waitq_waitabs(&wq, NULL, &ts);
+
+		d = psc_iostats_getintvrate(&iostats, 0);
+
+		psc_fmt_human(ratebuf, d);
+		printf("%7s/s\r", ratebuf);
+	}
 }
 
 int
@@ -969,13 +991,14 @@ main(int argc, char *argv[])
 		mode = MODE_GET;
 	}
 
+	psc_iostats_init(&iostats, "iostats");
 	psc_tiosthr_spawn(THRT_TIOS, "tios");
 
 	for (i = 0; i < opt_streams; i++) {
 		struct recvthr *rt;
 		struct stream *st;
 
-		thr = pscthr_init(THRT_WK, 0, worker_main, NULL, 0,
+		thr = pscthr_init(THRT_WK, 0, wkthr_main, NULL, 0,
 		    "wkthr%d", i);
 		push(&threads, thr);
 
@@ -1006,6 +1029,8 @@ main(int argc, char *argv[])
 
 	signal(SIGINT, handle_signal);
 	signal(SIGPIPE, handle_signal);
+
+	pscthr_init(THRT_DISP, 0, dispthr_main, NULL, 0, "dispthr");
 
 	for (i = 0; i < argc; i++) {
 		rv = walkfiles(mode, argv[i], flags, dstfn);

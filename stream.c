@@ -11,6 +11,7 @@
 
 #include "pfl/alloc.h"
 #include "pfl/atomic.h"
+#include "pfl/iostats.h"
 #include "pfl/random.h"
 
 #include "psync.h"
@@ -42,6 +43,7 @@ atomicio(int op, int fd, void *buf, size_t len)
 				errx(1, "exceeded number of retries");
 			rc = 0;
 		}
+		psc_iostats_intv_add(&iostats, rc);
 	}
 	return (rc);
 }
@@ -72,9 +74,12 @@ stream_sendxv(struct stream *st, uint64_t xid, int opc,
 		hdr.xid = psc_atomic32_inc_getnew(&psync_xid);
 
 	atomicio_write(st->wfd, &hdr, sizeof(hdr));
-	for (i = 0; i < nio; i++)
+	psc_iostats_intv_add(&iostats, sizeof(hdr));
+	for (i = 0; i < nio; i++) {
 		atomicio_write(st->wfd, iov[i].iov_base,
 		    iov[i].iov_len);
+		psc_iostats_intv_add(&iostats, iov[i].iov_len);
+	}
 }
 void
 stream_sendx(struct stream *st, uint64_t xid, int opc, void *p,
@@ -142,9 +147,8 @@ stream_get(void)
 		DYNARRAY_FOREACH(st, i, &streams) {
 			st = psc_dynarray_getpos(&streams, (i + rnd) %
 			    psc_dynarray_len(&streams));
-			if (psc_mutex_trylock(&st->mut)) {
+			if (psc_mutex_trylock(&st->mut))
 				return (st);
-			}
 		}
 	}
 }

@@ -757,7 +757,6 @@ dispthr_main(struct psc_thread *thr)
 	PFL_GETTIMESPEC(&ts);
 	ts.tv_nsec = 0;
 	while (!psync_finished) {
-		printf("fioo\n");
 		ts.tv_sec++;
 		psc_waitq_waitabs(&wq, NULL, &ts);
 

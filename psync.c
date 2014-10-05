@@ -92,7 +92,7 @@ const char		*opt_partial_dir;
 const char		*opt_password_file;
 const char		*opt_psync_path = "psync";
 const char		*opt_read_batch;
-const char		*opt_rsh = "ssh";
+const char		*opt_rsh = "ssh -oControlPath=none";
 const char		*opt_sockopts;
 const char		*opt_suffix;
 const char		*opt_temp_dir;
@@ -314,7 +314,7 @@ struct option opts[] = {
 	{ "sparse",		NO_ARG,	NULL,			'S' },
 	{ "specials",		NO_ARG,	&opt_specials,		1 },
 	{ "stats",		NO_ARG,	&opt_stats,		1 },
-	{ "streams",		REQARG,	&opt_streams,		1 },
+	{ "streams",		REQARG,	&opt_streams,		'N' },
 	{ "suffix",		REQARG,	NULL,			OPT_SUFFIX },
 	{ "super",		NO_ARG,	&opt_super,		1 },
 	{ "temp-dir",		REQARG,	NULL,			'T' },
@@ -462,11 +462,9 @@ dbglog("DSTDIR %s", wk->wk_fn);
 		wk = work_getitem(OPC_PUTDATA);
 		wk->wk_fh = fh;
 
-		if (fh) {
-			spinlock(&fh->lock);
-			fh->refcnt++;
-			freelock(&fh->lock);
-		}
+		spinlock(&fh->lock);
+		fh->refcnt++;
+		freelock(&fh->lock);
 
 		wk->wk_off = off;
 		if (off + (off_t)blksz > stb->st_size)
@@ -756,7 +754,7 @@ dispthr_main(struct psc_thread *thr)
 
 	PFL_GETTIMESPEC(&ts);
 	ts.tv_nsec = 0;
-	while (!psync_finished) {
+	for (;;) {
 		ts.tv_sec++;
 		psc_waitq_waitabs(&wq, NULL, &ts);
 
@@ -764,6 +762,7 @@ dispthr_main(struct psc_thread *thr)
 
 		psc_fmt_human(ratebuf, d);
 		printf("%7s/s\r", ratebuf);
+		fflush(stdout);
 	}
 }
 

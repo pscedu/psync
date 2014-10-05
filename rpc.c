@@ -481,13 +481,9 @@ warnx("ln %s -> %s", ufn, objfn);
 			pflog_warn("chmod %s", ufn);
 
 #ifdef HAVE_FUTIMENS
-		struct timespec ts[2];
-
 		if (futimens(fd, ts) == -1)
 			pflog_warn("utimens %s", ufn);
 #else
-		struct timeval tv[2];
-
 		if (futimes(fd, tv) == -1)
 			pflog_warn("utimes %s", ufn);
 #endif

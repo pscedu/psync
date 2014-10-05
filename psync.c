@@ -418,6 +418,7 @@ enqueue_put(int mode, const char *srcfn, const char *orig_dstfn,
 
 	blksz = opt_block_size ? (blksize_t)opt_block_size :
 	    stb->st_blksize;
+blksz = 1;
 
 	/* sending; push name first */
 	wk = work_getitem(OPC_PUTNAME);

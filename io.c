@@ -140,8 +140,6 @@ objns_rm_cb(const char *fn, __unusedx const struct stat *stb,
     int ftyp, __unusedx int level, __unusedx void *arg)
 {
 	switch (ftyp) {
-	case PFWT_D:
-		break;
 	case PFWT_DP:
 		if (rmdir(fn) == -1)
 			warn("rmdir %s", fn);

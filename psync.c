@@ -26,6 +26,7 @@
 #include <errno.h>
 #include <fcntl.h>
 #include <getopt.h>
+#include <sched.h>
 #include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
@@ -164,7 +165,7 @@ int			 opt_size_only;
 int			 opt_sparse;
 int			 opt_specials;
 int			 opt_stats;
-int			 opt_streams = 1;
+int			 opt_streams;
 int			 opt_super;
 int			 opt_timeout;		/* in seconds */
 int			 opt_times;
@@ -791,30 +792,61 @@ dispthr_main(struct psc_thread *thr)
 int
 getnprocessors(void)
 {
-#ifdef HAVE_SCHED_GETAFFINITY	/* Linux */
+#ifndef SYS_sched_getaffinity	/* Linux */
+	cpu_set_t mask;
+
+	if (sched_getaffinity(0, sizeof(mask), &mask) == -1)
+		psclog_warn("sched_getaffinity");
+	else
+		return (CPU_COUNT(&mask));
+
 #elif defined(HW_LOGICALCPU)	/* MacOS X */
+	int mib[2];
+
+	int np, mib[2];
+	size_t size;
+
+	size = sizeof(np);
+	mib[0] = CTL_HW;
+	mib[1] = HW_LOGICALCPU;
+	if (sysctl(mib, 2, &np, &size, NULL, 0) == -1)
+		return (-1);
+
 #elif defined(HW_NCPU)		/* BSD */
+	int np, mib[2];
+	size_t size;
+
+	size = sizeof(np);
+	mib[0] = CTL_HW;
+	mib[1] = HW_NCPU;
+	if (sysctl(mib, 2, &np, &size, NULL, 0) == -1)
+		return (-1);
+
 #endif
 	return (1);
 }
 
-/* XXX not dynamic but better than nothing */
+/* XXX not dynamic adjusting but better than nothing */
 int
 getnstreams(int want)
 {
-#ifdef HAVE_GETLOADAVG
-	double avg;
 	int np;
 
 	np = getnprocessors();
 
-	if (getloadavg(&avg) == -1)
-		pflog_warn("getloadavg");
+#ifndef HAVE_GETLOADAVG
+	{
+		double avg;
 
-	want = MAX(np - avg, 1);
-	want = MIN(want, MAX_STREAMS);
+
+		if (getloadavg(&avg, 1) == -1)
+			pflog_warn("getloadavg");
+
+		want = MAX(np - avg, 1);
+		want = MIN(want, MAX_STREAMS);
+	}
 #endif
-	return (want);
+	return (MIN(want, np));
 }
 
 int
@@ -832,6 +864,9 @@ main(int argc, char *argv[])
 
 	pfl_init();
 	progname = argv[0];
+
+	opt_streams = getnstreams(MAX_STREAMS);
+
 	while ((c = getopt_long(argc, argv,
 	    "0468aB:bCcdEEe:f:gHhIiKkLlmN:nOoPpqRrST:tuVvWxyz", opts,
 	    NULL)) != -1) {
@@ -1078,8 +1113,7 @@ warnx("@@@@@@@@@@@@@@ puppet=%d", opt_puppet);
 		pscthr_setready(thr);
 		push(&threads, thr);
 
-
-		// send nstreams request
+		// XXX send nstreams request
 	}
 
 	flags = PFL_FILEWALKF_RELPATH;

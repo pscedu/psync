@@ -11,7 +11,6 @@
 
 #include "pfl/alloc.h"
 #include "pfl/hashtbl.h"
-#include "pfl/random.h"
 #include "pfl/str.h"
 #include "pfl/walk.h"
 
@@ -27,9 +26,9 @@ objns_create(void)
 	spinlock(&lock);
 	if (objns_path[0] == '\0') {
 		snprintf(objns_path, sizeof(objns_path), ".psync.%d",
-		    psc_random32u(1000000));
-		if (mkdir(objns_path, 0700) == -1)
-			err(1, "mkdir %s", objns_path);
+		    opt_puppet);
+		if (mkdir(objns_path, 0700) == -1 && errno != EEXIST)
+			psc_fatal("mkdir %s", objns_path);
 	}
 	freelock(&lock);
 }
@@ -55,7 +54,7 @@ objns_makepath(char *fn, uint64_t fid)
 	 * length + 1 + depth + 1 + 16
 	 */
 	if (i == -1 || i >= PATH_MAX - (objns_depth + 2 + 16))
-		err(1, "snprintf");
+		psc_fatal("snprintf");
 	p = fn + i;
 
 	/* create a path */
@@ -67,7 +66,7 @@ objns_makepath(char *fn, uint64_t fid)
 	/* XXX could use a bitmap to skip this */
 
 	if (mkdir(fn, 0700) == -1 && errno != EEXIST)
-		err(1, "mkdir %s", fn);
+		psc_fatal("mkdir %s", fn);
 
 	snprintf(p, PATH_MAX - (p - fn), "%016"PRIx64, fid);
 }
@@ -95,7 +94,7 @@ _fcache_search(uint64_t fid, int fd)
 			objns_makepath(fn, fid);
 			f->fd = open(fn, O_RDWR | O_CREAT, 0600);
 			if (f->fd == -1)
-				err(1, "%s", fn);
+				psc_fatal("%s", fn);
 		} else {
 			f->fd = fd;
 			fd = -1;
@@ -166,7 +165,7 @@ dbglog("CLOSE %d\n", f->fd);
 			PSCFREE(f);
 		}
 
-	if (objns_path[0]) {
+	if (psync_rm_objns && objns_path[0]) {
 		/* unlink object namespace */
 		pfl_filewalk(objns_path, PFL_FILEWALKF_RECURSIVE, NULL,
 		    objns_rm_cb, NULL);

@@ -17,8 +17,9 @@
  * %PSC_END_COPYRIGHT%
  */
 
-#include <sys/types.h>
+#include <sys/param.h>
 #include <sys/stat.h>
+#include <sys/sysctl.h>
 
 #include <ctype.h>
 #include <err.h>
@@ -39,6 +40,7 @@
 #include "pfl/log.h"
 #include "pfl/pfl.h"
 #include "pfl/pool.h"
+#include "pfl/random.h"
 #include "pfl/str.h"
 #include "pfl/thread.h"
 #include "pfl/timerthr.h"
@@ -47,6 +49,8 @@
 
 #include "psync.h"
 #include "rpc.h"
+
+#define MAX_STREAMS	64
 
 #define MODE_GET	0
 #define MODE_PUT	1
@@ -92,7 +96,7 @@ const char		*opt_partial_dir;
 const char		*opt_password_file;
 const char		*opt_psync_path = "psync";
 const char		*opt_read_batch;
-const char		*opt_rsh = "ssh -oControlPath=none";
+const char		*opt_rsh = "ssh -oControlPath=none -oKbdInteractiveAuthentication=no";
 const char		*opt_sockopts;
 const char		*opt_suffix;
 const char		*opt_temp_dir;
@@ -186,7 +190,8 @@ struct psc_iostats	 iostats;
 struct psc_dynarray	 streams = DYNARRAY_INIT;
 
 int			 psync_is_master;	/* otherwise, is RPC puppet */
-int			 psync_finished;
+int			 psync_rm_objns;
+psc_atomic32_t		 psync_nrecvthr;
 
 #define NO_ARG		no_argument
 #define REQARG		required_argument
@@ -216,6 +221,7 @@ enum {
 	OPT_PASSWORD_FILE,
 	OPT_PORT,
 	OPT_PSYNC_PATH,
+	OPT_PUPPET,
 	OPT_READ_BATCH,
 	OPT_SOCKOPTS,
 	OPT_SUFFIX,
@@ -225,7 +231,7 @@ enum {
 
 struct option opts[] = {
 	{ "8-bit-output",	NO_ARG,	NULL,			'8' },
-	{ "PUPPET",		NO_ARG,	&opt_puppet,		1 },
+	{ "PUPPET",		REQARG,	NULL,			OPT_PUPPET },
 	{ "address",		REQARG,	NULL,			OPT_ADDRESS },
 	{ "append",		NO_ARG,	&opt_append,		1 },
 	{ "archive",		NO_ARG,	NULL,			'a' },
@@ -365,10 +371,12 @@ proc_work(struct work *wk)
 void
 wkthr_main(struct psc_thread *thr)
 {
-	static psc_spinlock_t lock = SPINLOCK_INIT;
+	static struct pfl_mutex mut = PSC_MUTEX_INIT;
+	static int finished;
+
+	int i, was_me = 0;
 	struct stream *st;
 	struct work *wk;
-	int i;
 
 	while (pscthr_run(thr)) {
 		wk = lc_getwait(&workq);
@@ -382,13 +390,28 @@ wkthr_main(struct psc_thread *thr)
 	}
 dbglog("@@@@@@@@@ CLOSE ALL writefds");
 	pthread_barrier_wait(&work_barrier);
-	spinlock(&lock);
-	if (!psync_finished) {
-		DYNARRAY_FOREACH(st, i, &streams)
-			close(st->wfd);
-		psync_finished = 1;
+	psc_mutex_lock(&mut);
+	if (!finished) {
+		was_me = 1;
+		finished = 1;
 	}
-	freelock(&lock);
+	psc_mutex_unlock(&mut);
+
+	if (was_me) {
+		/* close all but first stream */
+		DYNARRAY_FOREACH(st, i, &streams)
+			if (i)
+				close(st->wfd);
+
+		/* wait for all other streams to finish */
+		while (psc_atomic32_read(&psync_nrecvthr) > 1)
+			usleep(10000);
+
+		/* instruct remaining (first) stream cleanup */
+		st = psc_dynarray_getpos(&streams, 0);
+		rpc_send_done(st);
+		close(st->wfd);
+	}
 }
 
 struct work *
@@ -584,15 +607,13 @@ pushfile(struct psc_dynarray *da, char *fn,
 
 	fp = fopen(fn, "r");
 	if (fp == NULL)
-		err(1, "%s", fn);
+		psc_fatal("%s", fn);
 	while (fgets(buf, sizeof(buf), fp)) {
-		p = strdup(buf);
-		if (p == NULL)
-			err(1, NULL);
+		p = pfl_strdup(buf);
 		f(da, p, arg);
 	}
 	if (ferror(fp))
-		err(1, "%s", fn);
+		psc_fatal("%s", fn);
 	fclose(fp);
 }
 
@@ -644,7 +665,7 @@ push_filter(struct psc_dynarray *da, char *s, int type)
 		while (isspace(*s))
 			s++;
 		if (*s == '\0')
-			psc_fatal("error");
+			psc_fatal("invalid format");
 		sep = strchr(sty, ',');
 		if (sep)
 			*sep = '\0';
@@ -654,7 +675,7 @@ push_filter(struct psc_dynarray *da, char *s, int type)
 			    strcmp(ty->abbr, sty) == 0)
 				break;
 		if (n == nitems(types))
-			psc_fatal("error");
+			psc_fatal("invalid format");
 		fp->fp_type = ty->type;
 		fp->fp_pat = s;
 	}
@@ -677,7 +698,7 @@ filesfrom(int mode, const char *fromfn, int flags, const char *dstfn)
 
 	fp = fopen(fromfn, "r");
 	if (fp == NULL)
-		err(1, "open %s", fromfn);
+		psc_fatal("open %s", fromfn);
 	for (;;) {
 		c = fgetc(fp);
 		if (c == EOF)
@@ -694,7 +715,7 @@ filesfrom(int mode, const char *fromfn, int flags, const char *dstfn)
 		} else {
 			if (p == fn + sizeof(fn) - 1) {
 				errno = ENAMETOOLONG;
-				warn("%s:%d", fromfn, lineno);
+				pflog_warn("%s:%d", fromfn, lineno);
 			} else
 				*p++ = c;
 		}
@@ -741,7 +762,7 @@ puppet_mode(void)
 __dead void
 usage(void)
 {
-	fprintf(stderr, "usage: %s src dst\n", progname);
+	fprintf(stderr, "usage: %s [options] src ... dst\n", progname);
 	exit(1);
 }
 
@@ -765,6 +786,35 @@ dispthr_main(struct psc_thread *thr)
 		printf("%7s/s\r", ratebuf);
 		fflush(stdout);
 	}
+}
+
+int
+getnprocessors(void)
+{
+#ifdef HAVE_SCHED_GETAFFINITY	/* Linux */
+#elif defined(HW_LOGICALCPU)	/* MacOS X */
+#elif defined(HW_NCPU)		/* BSD */
+#endif
+	return (1);
+}
+
+/* XXX not dynamic but better than nothing */
+int
+getnstreams(int want)
+{
+#ifdef HAVE_GETLOADAVG
+	double avg;
+	int np;
+
+	np = getnprocessors();
+
+	if (getloadavg(&avg) == -1)
+		pflog_warn("getloadavg");
+
+	want = MAX(np - avg, 1);
+	want = MIN(want, MAX_STREAMS);
+#endif
+	return (want);
 }
 
 int
@@ -821,7 +871,7 @@ main(int argc, char *argv[])
 		case 'l':		opt_links = 1;			break;
 		case 'm':		opt_prune_empty_dirs = 1;	break;
 		case 'N':
-			if (!parsenum(&opt_streams, optarg, 0, 64))
+			if (!parsenum(&opt_streams, optarg, 0, MAX_STREAMS))
 				err(1, "streams: %s", optarg);
 			break;
 		case 'n':		opt_dry_run = 1;		break;
@@ -900,6 +950,10 @@ main(int argc, char *argv[])
 		case OPT_PARTIAL_DIR:	opt_partial_dir = optarg;	break;
 		case OPT_PASSWORD_FILE:	opt_password_file = optarg;	break;
 		case OPT_PSYNC_PATH:	opt_psync_path = optarg;	break;
+		case OPT_PUPPET:
+			if (!parsenum(&opt_puppet, optarg, 0, 1000000))
+				err(1, "--PUPPET=%s", optarg);
+			break;
 		case OPT_READ_BATCH:	opt_read_batch = optarg;	break;
 		case OPT_SOCKOPTS:	opt_sockopts = optarg;		break;
 		case OPT_SUFFIX:	opt_suffix = optarg;		break;
@@ -993,6 +1047,10 @@ main(int argc, char *argv[])
 	psc_iostats_init(&iostats, "iostats");
 	psc_tiosthr_spawn(THRT_TIOS, "tios");
 
+	do {
+		opt_puppet = psc_random32u(1000000);
+	} while (!opt_puppet);
+
 	for (i = 0; i < opt_streams; i++) {
 		struct recvthr *rt;
 		struct stream *st;
@@ -1007,8 +1065,9 @@ main(int argc, char *argv[])
 		 *	--sparse
 		 *	--exclude filter patterns
 		 */
-		st = stream_cmdopen("%s %s %s --PUPPET",
-		    opt_rsh, host, opt_psync_path);
+		st = stream_cmdopen("%s %s %s --PUPPET=%d",
+		    opt_rsh, host, opt_psync_path, opt_puppet);
+warnx("@@@@@@@@@@@@@@ puppet=%d", opt_puppet);
 
 		psc_dynarray_add(&streams, st);
 
@@ -1018,6 +1077,9 @@ main(int argc, char *argv[])
 		rt->st = st;
 		pscthr_setready(thr);
 		push(&threads, thr);
+
+
+		// send nstreams request
 	}
 
 	flags = PFL_FILEWALKF_RELPATH;
@@ -1048,6 +1110,8 @@ main(int argc, char *argv[])
 		if (rv)
 			rc = rv;
 	}
+
+	psync_rm_objns = 1;
 	fcache_destroy();
 
 	exit(rc);

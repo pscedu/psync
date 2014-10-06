@@ -18,7 +18,7 @@ struct hdr {
 #define OPC_GETCKSUM_REQ	5
 #define OPC_GETCKSUM_REP	6
 #define OPC_PUTNAME		7
-#define OPC_CTL			8
+#define OPC_DONE		8
 
 struct rpc_sub_stat {
 	uint64_t		dev;
@@ -85,9 +85,7 @@ struct rpc_putname {
 	 */
 };
 
-struct rpc_ctl {
-};
-
+void rpc_send_done(struct stream *);
 void rpc_send_getfile(uint64_t, const char *);
 void rpc_send_putdata(uint64_t, off_t, const void *, size_t);
 void rpc_send_putname(const char *, const char *, const struct stat *);

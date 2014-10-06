@@ -63,7 +63,7 @@ struct walkarg {
 #define push(da, ent)							\
 	do {								\
 		if (psc_dynarray_add((da), (ent)))			\
-			err(1, NULL);					\
+			psc_fatal("out of memory");			\
 	} while (0)
 
 #define dbglog(fmt, ...)						\
@@ -120,8 +120,11 @@ extern int			 objns_depth;
 extern volatile sig_atomic_t	 exit_from_signal;
 
 extern psc_atomic32_t		 psync_xid;
+extern psc_atomic32_t		 psync_nrecvthr;
 extern int			 psync_is_master;
+extern int			 psync_rm_objns;
 
+extern int			 opt_puppet;
 extern int			 opt_recursive;
 extern int			 opt_streams;
 

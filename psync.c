@@ -390,6 +390,7 @@ wkthr_main(struct psc_thread *thr)
 		if (exit_from_signal)
 			break;
 	}
+dbglog("dtor");
 	pthread_barrier_wait(&work_barrier);
 dbglog("@@@@@@@@@ CLOSE ALL writefds");
 	psc_mutex_lock(&mut);
@@ -743,6 +744,8 @@ puppet_mode(void)
 	struct recvthr *rt;
 	struct stream *st;
 
+	opt_streams = 1;
+
 	signal(SIGINT, handle_signal);
 	signal(SIGPIPE, handle_signal);
 
@@ -1026,6 +1029,7 @@ main(int argc, char *argv[])
 
 	lc_reginit(&workq, struct work, wk_lentry, "workq");
 
+dbglog("str %d", opt_streams);
 	pthread_barrier_init(&work_barrier, NULL, opt_streams);
 
 	if (opt_puppet)

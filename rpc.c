@@ -508,6 +508,7 @@ void
 rpc_handle_done(struct hdr *h, void *buf)
 {
 	struct rpc_done *d = buf;
+dbglog("handle_done");
 
 	(void)h;
 	(void)buf;
@@ -577,6 +578,9 @@ recvthr_main(struct psc_thread *thr)
 	}
 dbglog("CLOSE %d\n", rt->st->rfd);
 	close(rt->st->rfd);
+
+	if (opt_puppet)
+		rpc_send_done(rt->st, 0);
 
 	psc_atomic32_dec(&psync_nrecvthr);
 }

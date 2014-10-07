@@ -80,7 +80,7 @@ rpc_send_putdata(uint64_t fid, off_t off, const void *buf, size_t len)
 	memset(&pd, 0, sizeof(pd));
 	pd.fid = fid;
 	pd.off = off;
-warnx("PUT %ld len %zd", off, len);
+
 	iov[0].iov_base = &pd;
 	iov[0].iov_len = sizeof(pd);
 
@@ -127,12 +127,16 @@ rpc_send_putname(const char *dir, const char *fn,
 }
 
 void
-rpc_send_done(struct stream *st)
+rpc_send_done(struct stream *st, int clean)
 {
+	struct rpc_done d;
 	struct iovec iov;
 
-	iov.iov_base = NULL;
-	iov.iov_len = 0;
+	d.clean = clean;
+
+	iov.iov_base = &d;
+	iov.iov_len = sizeof(d);
+
 	stream_sendv(st, OPC_DONE, &iov, 1);
 }
 
@@ -205,7 +209,6 @@ rpc_handle_putdata(struct hdr *h, void *buf)
 	len = h->msglen - sizeof(*pd);
 
 	fd = fcache_search(pd->fid);
-warnx("off=%"PRId64" len=%"PRId64, pd->off, len);
 	rc = pwrite(fd, pd->data, len, pd->off);
 	if (rc != (ssize_t)len)
 		err(1, "write");
@@ -504,10 +507,14 @@ warnx("ln %s -> %s", ufn, objfn);
 void
 rpc_handle_done(struct hdr *h, void *buf)
 {
+	struct rpc_done *d = buf;
+
 	(void)h;
 	(void)buf;
 
-	psync_rm_objns = 1;
+	if (d->clean)
+		psync_rm_objns = 1;
+	psync_finished = 1;
 }
 
 typedef void (*op_handler_t)(struct hdr *, void *);
@@ -565,12 +572,11 @@ recvthr_main(struct psc_thread *thr)
 			break;
 		ops[hdr.opc](&hdr, buf);
 
-		if (exit_from_signal)
+		if (exit_from_signal || psync_finished)
 			break;
 	}
-dbglog("RECV exit");
 dbglog("CLOSE %d\n", rt->st->rfd);
-	//close(rt->st->rfd);
+	close(rt->st->rfd);
 
 	psc_atomic32_dec(&psync_nrecvthr);
 }

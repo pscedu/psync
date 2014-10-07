@@ -192,6 +192,7 @@ struct psc_dynarray	 streams = DYNARRAY_INIT;
 
 int			 psync_is_master;	/* otherwise, is RPC puppet */
 int			 psync_rm_objns;
+int			 psync_finished;
 psc_atomic32_t		 psync_nrecvthr;
 
 #define NO_ARG		no_argument
@@ -389,8 +390,8 @@ wkthr_main(struct psc_thread *thr)
 		if (exit_from_signal)
 			break;
 	}
-dbglog("@@@@@@@@@ CLOSE ALL writefds");
 	pthread_barrier_wait(&work_barrier);
+dbglog("@@@@@@@@@ CLOSE ALL writefds");
 	psc_mutex_lock(&mut);
 	if (!finished) {
 		was_me = 1;
@@ -402,15 +403,20 @@ dbglog("@@@@@@@@@ CLOSE ALL writefds");
 		/* close all but first stream */
 		DYNARRAY_FOREACH(st, i, &streams)
 			if (i)
+{
+				rpc_send_done(st, 0);
+dbglog("THR running teardown %d", st->wfd);
 				close(st->wfd);
+}
 
 		/* wait for all other streams to finish */
 		while (psc_atomic32_read(&psync_nrecvthr) > 1)
 			usleep(10000);
+dbglog("done waiting");
 
 		/* instruct remaining (first) stream cleanup */
 		st = psc_dynarray_getpos(&streams, 0);
-		rpc_send_done(st);
+		rpc_send_done(st, 1);
 		close(st->wfd);
 	}
 }
@@ -442,7 +448,6 @@ enqueue_put(int mode, const char *srcfn, const char *orig_dstfn,
 
 	blksz = opt_block_size ? (blksize_t)opt_block_size :
 	    stb->st_blksize;
-blksz = 1;
 
 	/* sending; push name first */
 	wk = work_getitem(OPC_PUTNAME);
@@ -784,7 +789,7 @@ dispthr_main(struct psc_thread *thr)
 		d = psc_iostats_getintvrate(&iostats, 0);
 
 		psc_fmt_human(ratebuf, d);
-		printf("%7s/s\r", ratebuf);
+		printf("\r%7s/s", ratebuf);
 		fflush(stdout);
 	}
 }

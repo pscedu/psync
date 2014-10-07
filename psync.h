@@ -67,7 +67,7 @@ struct walkarg {
 	} while (0)
 
 #define dbglog(fmt, ...)						\
-	psclogs_debug(PSS_TMP, psync_is_master ?			\
+	psclogs_notice(PSS_TMP, psync_is_master ?			\
 	    "[master] " fmt : "[puppet] " fmt, ##__VA_ARGS__)
 
 #define IOP_READ	0
@@ -123,6 +123,7 @@ extern psc_atomic32_t		 psync_xid;
 extern psc_atomic32_t		 psync_nrecvthr;
 extern int			 psync_is_master;
 extern int			 psync_rm_objns;
+extern int			 psync_finished;
 
 extern int			 opt_puppet;
 extern int			 opt_recursive;

@@ -85,7 +85,12 @@ struct rpc_putname {
 	 */
 };
 
-void rpc_send_done(struct stream *);
+struct rpc_done {
+	 int32_t		clean;
+	 int32_t		_pad;
+};
+
+void rpc_send_done(struct stream *, int);
 void rpc_send_getfile(uint64_t, const char *);
 void rpc_send_putdata(uint64_t, off_t, const void *, size_t);
 void rpc_send_putname(const char *, const char *, const struct stat *);

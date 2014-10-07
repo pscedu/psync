@@ -63,7 +63,7 @@ rpc_send_getfile(uint64_t xid, const char *fn)
 
 	iov[1].iov_base = (void *)fn;
 	iov[1].iov_len = strlen(fn) + 1;
-dbglog("SEND GETFILE %lx", xid);
+psynclog_debug("SEND GETFILE %lx", xid);
 
 	st = stream_get();
 	stream_sendxv(st, xid, OPC_GETFILE_REQ, iov, nitems(iov));
@@ -201,7 +201,7 @@ rpc_handle_putdata(struct hdr *h, void *buf)
 #if 0
 	if (h->msglen == 0 ||
 	    h->msglen > MAX_BUFSZ) {
-		pflog_warn("invalid msglen");
+		psynclog_warn("invalid msglen");
 		return;
 	}
 #endif
@@ -211,7 +211,8 @@ rpc_handle_putdata(struct hdr *h, void *buf)
 	fd = fcache_search(pd->fid);
 	rc = pwrite(fd, pd->data, len, pd->off);
 	if (rc != (ssize_t)len)
-		err(1, "write");
+		psynclog_error("write off=%"PRId64" len=%"PRId64" "
+		    "rc=%zd", pd->off, len, rc);
 }
 
 void
@@ -388,28 +389,28 @@ rpc_handle_putname(struct hdr *h, void *buf)
 
 	/* apply incoming name substitutions */
 	ufn = userfn_subst(orig_ufn);
-dbglog("USERFN [%lx] %s -> %s", h->xid, orig_ufn, ufn);
+psynclog_debug("USERFN [%lx] %s -> %s", h->xid, orig_ufn, ufn);
 
 	if (S_ISCHR(pn->pstb.mode) ||
 	    S_ISBLK(pn->pstb.mode)) {
 		if (mknod(ufn, pn->pstb.mode, pn->pstb.rdev) == -1) {
-			pflog_warn("mknod %s", ufn);
+			psynclog_warn("mknod %s", ufn);
 			return;
 		}
 	} else if (S_ISDIR(pn->pstb.mode)) {
 		if (mkdir(ufn, pn->pstb.mode) == -1) {
-			pflog_warn("mkdir %s", ufn);
+			psynclog_warn("mkdir %s", ufn);
 			return;
 		}
 	} else if (S_ISFIFO(pn->pstb.mode)) {
 		if (mkfifo(ufn, pn->pstb.mode) == -1) {
-			pflog_warn("mkfifo %s", ufn);
+			psynclog_warn("mkfifo %s", ufn);
 			return;
 		}
 	} else if (S_ISLNK(pn->pstb.mode)) {
 		objns_makepath(objfn, pn->fid);
 		if (symlink(objfn, ufn) == -1) {
-			pflog_warn("symlink %s", ufn);
+			psynclog_warn("symlink %s", ufn);
 			return;
 		}
 	} else if (S_ISSOCK(pn->pstb.mode)) {
@@ -417,7 +418,7 @@ dbglog("USERFN [%lx] %s -> %s", h->xid, orig_ufn, ufn);
 
 		fd = socket(AF_LOCAL, SOCK_STREAM, PF_UNSPEC);
 		if (fd == -1) {
-			pflog_warn("socket %s", ufn);
+			psynclog_warn("socket %s", ufn);
 			return;
 		}
 		memset(&sun, 0, sizeof(sun));
@@ -427,7 +428,7 @@ dbglog("USERFN [%lx] %s -> %s", h->xid, orig_ufn, ufn);
 		if (bind(fd, (struct sockaddr *)&sun,
 		    sizeof(sun)) == -1) {
 			close(fd);
-			pflog_warn("bind %s", ufn);
+			psynclog_warn("bind %s", ufn);
 			return;
 		}
 		close(fd);
@@ -437,18 +438,18 @@ dbglog("USERFN [%lx] %s -> %s", h->xid, orig_ufn, ufn);
 warnx("objfn %s", objfn);
 		fd = open(objfn, O_CREAT | O_RDWR, 0600);
 		if (fd == -1) {
-			pflog_warn("open %s", ufn);
+			psynclog_warn("open %s", ufn);
 			return;
 		}
 warnx("ln %s -> %s", ufn, objfn);
 		if (link(objfn, ufn) == -1) {
-			pflog_warn("link %s", ufn);
+			psynclog_warn("link %s", ufn);
 			return;
 		}
 
 		fcache_insert(pn->fid, fd);
 	} else {
-		pflog_warn("invalid mode %#o", pn->pstb.mode);
+		psynclog_warn("invalid mode %#o", pn->pstb.mode);
 		return;
 	}
 
@@ -475,31 +476,31 @@ warnx("ln %s -> %s", ufn, objfn);
 
 	if (fd == -1) {
 		if (lchown(ufn, pn->pstb.uid, pn->pstb.gid) == -1)
-			pflog_warn("chown %s", ufn);
+			psynclog_warn("chown %s", ufn);
 		if (lchmod(ufn, pn->pstb.mode) == -1)
-			pflog_warn("chmod %s", ufn);
+			psynclog_warn("chmod %s", ufn);
 
 #ifdef HAVE_FUTIMENS
 		if (utimensat(AT_FDCWD, ufn, ts,
 		    AT_SYMLINK_NOFOLLOW) == -1)
-			pflog_warn("utimens %s", ufn);
+			psynclog_warn("utimens %s", ufn);
 #else
 		if (lutimes(ufn, tv) == -1)
-			pflog_warn("utimes %s", ufn);
+			psynclog_warn("utimes %s", ufn);
 #endif
 
 	} else {
 		if (fchown(fd, pn->pstb.uid, pn->pstb.gid) == -1)
-			pflog_warn("chown %s", ufn);
+			psynclog_warn("chown %s", ufn);
 		if (fchmod(fd, pn->pstb.mode) == -1)
-			pflog_warn("chmod %s", ufn);
+			psynclog_warn("chmod %s", ufn);
 
 #ifdef HAVE_FUTIMENS
 		if (futimens(fd, ts) == -1)
-			pflog_warn("utimens %s", ufn);
+			psynclog_warn("utimens %s", ufn);
 #else
 		if (futimes(fd, tv) == -1)
-			pflog_warn("utimes %s", ufn);
+			psynclog_warn("utimes %s", ufn);
 #endif
 	}
 }
@@ -508,7 +509,7 @@ void
 rpc_handle_done(struct hdr *h, void *buf)
 {
 	struct rpc_done *d = buf;
-dbglog("handle_done");
+psynclog_debug("handle_done");
 
 	(void)h;
 	(void)buf;
@@ -576,10 +577,10 @@ recvthr_main(struct psc_thread *thr)
 		if (exit_from_signal || psync_finished)
 			break;
 	}
-dbglog("CLOSE %d\n", rt->st->rfd);
+psynclog_debug("CLOSE %d\n", rt->st->rfd);
 	close(rt->st->rfd);
 
-	if (opt_puppet)
+	if (!psync_is_master)
 		rpc_send_done(rt->st, 0);
 
 	psc_atomic32_dec(&psync_nrecvthr);

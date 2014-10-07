@@ -36,8 +36,9 @@ atomicio(int op, int fd, void *buf, size_t len)
 			break;
 		if (rc == -1) {
 			if (errno != EINTR)
-				err(1, "%s", op == IOP_READ ?
-				    "read" : "write");
+				psync_fatal("%s sz=%zd rc=%zd",
+				    op == IOP_READ ? "read" : "write",
+				    rem, rc);
 #define MAX_RETRY	10
 			if (++nerr > MAX_RETRY)
 				errx(1, "exceeded number of retries");

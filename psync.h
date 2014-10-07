@@ -63,11 +63,35 @@ struct walkarg {
 #define push(da, ent)							\
 	do {								\
 		if (psc_dynarray_add((da), (ent)))			\
-			psc_fatal("out of memory");			\
+			psync_fatal("out of memory");			\
 	} while (0)
 
-#define dbglog(fmt, ...)						\
-	psclogs_notice(PSS_TMP, psync_is_master ?			\
+#define psynclog_debug(fmt, ...)					\
+	psclog_debug(psync_is_master ?					\
+	    "[master] " fmt : "[puppet] " fmt, ##__VA_ARGS__)
+
+#define psynclog_tdebug(fmt, ...)					\
+	psclogs_debug(PSS_TMP, psync_is_master ?			\
+	    "[master] " fmt : "[puppet] " fmt, ##__VA_ARGS__)
+
+#define psynclog_warn(fmt, ...)						\
+	psclog_warn(psync_is_master ?					\
+	    "[master] " fmt : "[puppet] " fmt, ##__VA_ARGS__)
+
+#define psynclog_warnx(fmt, ...)					\
+	psclog_warnx(psync_is_master ?					\
+	    "[master] " fmt : "[puppet] " fmt, ##__VA_ARGS__)
+
+#define psynclog_error(fmt, ...)					\
+	psclog_error(psync_is_master ?					\
+	    "[master] " fmt : "[puppet] " fmt, ##__VA_ARGS__)
+
+#define psynclog_errorx(fmt, ...)					\
+	psclog_errorx(psync_is_master ?					\
+	    "[master] " fmt : "[puppet] " fmt, ##__VA_ARGS__)
+
+#define psync_fatal(fmt, ...)						\
+	psc_fatal(psync_is_master ?					\
 	    "[master] " fmt : "[puppet] " fmt, ##__VA_ARGS__)
 
 #define IOP_READ	0

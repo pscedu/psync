@@ -343,7 +343,7 @@ filehandle_dropref(struct filehandle *fh, size_t len)
 	if (--fh->refcnt == 0 &&
 	    fh->flags & FHF_DONE) {
 		munmap(fh->base, len);
-dbglog("CLOSE %d\n", fh->fd);
+psynclog_debug("CLOSE %d\n", fh->fd);
 		close(fh->fd);
 		PSCFREE(fh);
 	} else
@@ -390,9 +390,9 @@ wkthr_main(struct psc_thread *thr)
 		if (exit_from_signal)
 			break;
 	}
-dbglog("dtor");
+psynclog_debug("dtor");
 	pthread_barrier_wait(&work_barrier);
-dbglog("@@@@@@@@@ CLOSE ALL writefds");
+psynclog_debug("@@@@@@@@@ CLOSE ALL writefds");
 	psc_mutex_lock(&mut);
 	if (!finished) {
 		was_me = 1;
@@ -406,19 +406,22 @@ dbglog("@@@@@@@@@ CLOSE ALL writefds");
 			if (i)
 {
 				rpc_send_done(st, 0);
-dbglog("THR running teardown %d", st->wfd);
+psynclog_debug("CLOSE %d", st->wfd);
 				close(st->wfd);
 }
 
 		/* wait for all other streams to finish */
 		while (psc_atomic32_read(&psync_nrecvthr) > 1)
 			usleep(10000);
-dbglog("done waiting");
+psynclog_debug("done waiting");
 
 		/* instruct remaining (first) stream cleanup */
 		st = psc_dynarray_getpos(&streams, 0);
 		rpc_send_done(st, 1);
+psynclog_debug("CLOSE %d", st->wfd);
 		close(st->wfd);
+
+		psync_finished = 1;
 	}
 }
 
@@ -449,15 +452,16 @@ enqueue_put(int mode, const char *srcfn, const char *orig_dstfn,
 
 	blksz = opt_block_size ? (blksize_t)opt_block_size :
 	    stb->st_blksize;
+blksz = 512 * 1024;
 
 	/* sending; push name first */
 	wk = work_getitem(OPC_PUTNAME);
 	memcpy(&wk->wk_stb, stb, sizeof(wk->wk_stb));
 	strlcpy(wk->wk_basefn, pfl_basename(srcfn),
 	    sizeof(wk->wk_basefn));
-dbglog("DSTFN %s", wk->wk_basefn);
+psynclog_debug("DSTFN %s", wk->wk_basefn);
 	strlcpy(wk->wk_fn, orig_dstfn, sizeof(wk->wk_fn));
-dbglog("DSTDIR %s", wk->wk_fn);
+psynclog_debug("DSTDIR %s", wk->wk_fn);
 	lc_add(&workq, wk);
 
 	// S_ISREG()
@@ -534,13 +538,13 @@ push_putfile_walkcb(const char *fn, const struct stat *stb,
 #endif
 
 	if (wa->prefix) {
-dbglog("fn %s", fn);
+psynclog_debug("fn %s", fn);
 		snprintf(dstfn_buf, sizeof(dstfn_buf), "%s/%s",
 		    wa->prefix, fn + wa->trim);
 		p = strrchr(dstfn_buf, '/');
 		*p = '\0';
 		dstfn = dstfn_buf;
-dbglog("PUT %s -> %s [%s]", fn, dstfn, wa->prefix);
+psynclog_debug("PUT %s -> %s [%s]", fn, dstfn, wa->prefix);
 	} else
 		dstfn = fn;
 	enqueue_put(MODE_PUT, fn, dstfn, stb);
@@ -596,7 +600,7 @@ walkfiles(int mode, const char *srcfn, int flags, const char *dstfn)
 
 	wk = work_getitem(OPC_GETFILE_REQ);
 	wk->wk_xid = psc_atomic32_inc_getnew(&psync_xid);
-dbglog("MAP %lx -> %s", wk->wk_xid, finalfn);
+psynclog_debug("MAP %lx -> %s", wk->wk_xid, finalfn);
 	strlcpy(wk->wk_fn, srcfn, sizeof(wk->wk_fn));
 //	if (!opt_partial)
 //		truncate(finalfn, 0);
@@ -614,13 +618,13 @@ pushfile(struct psc_dynarray *da, char *fn,
 
 	fp = fopen(fn, "r");
 	if (fp == NULL)
-		psc_fatal("%s", fn);
+		psync_fatal("%s", fn);
 	while (fgets(buf, sizeof(buf), fp)) {
 		p = pfl_strdup(buf);
 		f(da, p, arg);
 	}
 	if (ferror(fp))
-		psc_fatal("%s", fn);
+		psync_fatal("%s", fn);
 	fclose(fp);
 }
 
@@ -672,7 +676,7 @@ push_filter(struct psc_dynarray *da, char *s, int type)
 		while (isspace(*s))
 			s++;
 		if (*s == '\0')
-			psc_fatal("invalid format");
+			psync_fatal("invalid format");
 		sep = strchr(sty, ',');
 		if (sep)
 			*sep = '\0';
@@ -682,7 +686,7 @@ push_filter(struct psc_dynarray *da, char *s, int type)
 			    strcmp(ty->abbr, sty) == 0)
 				break;
 		if (n == nitems(types))
-			psc_fatal("invalid format");
+			psync_fatal("invalid format");
 		fp->fp_type = ty->type;
 		fp->fp_pat = s;
 	}
@@ -705,7 +709,7 @@ filesfrom(int mode, const char *fromfn, int flags, const char *dstfn)
 
 	fp = fopen(fromfn, "r");
 	if (fp == NULL)
-		psc_fatal("open %s", fromfn);
+		psync_fatal("open %s", fromfn);
 	for (;;) {
 		c = fgetc(fp);
 		if (c == EOF)
@@ -722,7 +726,7 @@ filesfrom(int mode, const char *fromfn, int flags, const char *dstfn)
 		} else {
 			if (p == fn + sizeof(fn) - 1) {
 				errno = ENAMETOOLONG;
-				pflog_warn("%s:%d", fromfn, lineno);
+				psynclog_warn("%s:%d", fromfn, lineno);
 			} else
 				*p++ = c;
 		}
@@ -780,21 +784,31 @@ dispthr_main(struct psc_thread *thr)
 {
 	char ratebuf[PSCFMT_HUMAN_BUFSIZ];
 	struct psc_waitq wq = PSC_WAITQ_INIT;
-	struct timespec ts;
-	double d;
+	struct timespec ts, start, d;
+	double rate;
+	int sec;
 
-	PFL_GETTIMESPEC(&ts);
+	PFL_GETTIMESPEC(&start);
+	ts = start;
 	ts.tv_nsec = 0;
-	for (;;) {
+	while (pscthr_run(thr)) {
+		if (psync_finished)
+			break;
+
 		ts.tv_sec++;
 		psc_waitq_waitabs(&wq, NULL, &ts);
 
-		d = psc_iostats_getintvrate(&iostats, 0);
+		timespecsub(&ts, &start, &d);
+		sec = d.tv_sec;
 
-		psc_fmt_human(ratebuf, d);
-		printf("\r%7s/s", ratebuf);
+		rate = psc_iostats_getintvrate(&iostats, 0);
+
+		psc_fmt_human(ratebuf, rate);
+		printf(" elapsed %02d:%02d:%02d %7s/s\r",
+		    sec / 60 / 60, sec / 60, sec % 60, ratebuf);
 		fflush(stdout);
 	}
+	printf("\n");
 }
 
 int
@@ -804,7 +818,7 @@ getnprocessors(void)
 	cpu_set_t mask;
 
 	if (sched_getaffinity(0, sizeof(mask), &mask) == -1)
-		psclog_warn("sched_getaffinity");
+		psynclog_warn("sched_getaffinity");
 	else
 		return (CPU_COUNT(&mask));
 
@@ -848,7 +862,7 @@ getnstreams(int want)
 
 
 		if (getloadavg(&avg, 1) == -1)
-			pflog_warn("getloadavg");
+			psynclog_warn("getloadavg");
 
 		want = MAX(np - avg, 1);
 		want = MIN(want, MAX_STREAMS);
@@ -1029,7 +1043,7 @@ main(int argc, char *argv[])
 
 	lc_reginit(&workq, struct work, wk_lentry, "workq");
 
-dbglog("str %d", opt_streams);
+psynclog_debug("str %d", opt_streams);
 	pthread_barrier_init(&work_barrier, NULL, opt_streams);
 
 	if (opt_puppet)
@@ -1103,6 +1117,10 @@ dbglog("str %d", opt_streams);
 		    "wkthr%d", i);
 		push(&threads, thr);
 
+		/* spawning multiple ssh too quickly fails */
+		if (i)
+			usleep(30000);
+
 		/*
 		 * add:
 		 *	-r
@@ -1111,7 +1129,6 @@ dbglog("str %d", opt_streams);
 		 */
 		st = stream_cmdopen("%s %s %s --PUPPET=%d",
 		    opt_rsh, host, opt_psync_path, opt_puppet);
-warnx("@@@@@@@@@@@@@@ puppet=%d", opt_puppet);
 
 		psc_dynarray_add(&streams, st);
 
@@ -1134,7 +1151,8 @@ warnx("@@@@@@@@@@@@@@ puppet=%d", opt_puppet);
 	signal(SIGINT, handle_signal);
 	signal(SIGPIPE, handle_signal);
 
-	pscthr_init(THRT_DISP, 0, dispthr_main, NULL, 0, "dispthr");
+	thr = pscthr_init(THRT_DISP, 0, dispthr_main, NULL, 0, "dispthr");
+	push(&threads, thr);
 
 	for (i = 0; i < argc; i++) {
 		rv = walkfiles(mode, argv[i], flags, dstfn);

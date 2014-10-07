@@ -28,7 +28,7 @@ objns_create(void)
 		snprintf(objns_path, sizeof(objns_path), ".psync.%d",
 		    opt_puppet);
 		if (mkdir(objns_path, 0700) == -1 && errno != EEXIST)
-			psc_fatal("mkdir %s", objns_path);
+			psync_fatal("mkdir %s", objns_path);
 	}
 	freelock(&lock);
 }
@@ -54,7 +54,7 @@ objns_makepath(char *fn, uint64_t fid)
 	 * length + 1 + depth + 1 + 16
 	 */
 	if (i == -1 || i >= PATH_MAX - (objns_depth + 2 + 16))
-		psc_fatal("snprintf");
+		psync_fatal("snprintf");
 	p = fn + i;
 
 	/* create a path */
@@ -66,7 +66,7 @@ objns_makepath(char *fn, uint64_t fid)
 	/* XXX could use a bitmap to skip this */
 
 	if (mkdir(fn, 0700) == -1 && errno != EEXIST)
-		psc_fatal("mkdir %s", fn);
+		psync_fatal("mkdir %s", fn);
 
 	snprintf(p, PATH_MAX - (p - fn), "%016"PRIx64, fid);
 }
@@ -94,7 +94,7 @@ _fcache_search(uint64_t fid, int fd)
 			objns_makepath(fn, fid);
 			f->fd = open(fn, O_RDWR | O_CREAT, 0600);
 			if (f->fd == -1)
-				psc_fatal("%s", fn);
+				psync_fatal("%s", fn);
 		} else {
 			f->fd = fd;
 			fd = -1;
@@ -116,7 +116,7 @@ fcache_close(uint64_t fid)
 
 	f = psc_hashtbl_searchdel(&fcache, NULL, &fid);
 	if (f) {
-dbglog("CLOSE %d\n", f->fd);
+psynclog_debug("CLOSE %d\n", f->fd);
 		close(f->fd);
 		/* XXX refcnting/race ?? */
 		PSCFREE(f);
@@ -159,7 +159,7 @@ fcache_destroy(void)
 
 	PSC_HASHTBL_FOREACH_BUCKET(b, &fcache)
 		PSC_HASHBKT_FOREACH_ENTRY_SAFE(&fcache, f, fn, b) {
-dbglog("CLOSE %d\n", f->fd);
+psynclog_debug("CLOSE %d\n", f->fd);
 			close(f->fd);
 			psc_hashbkt_del_item(&fcache, b, f);
 			PSCFREE(f);

@@ -30,6 +30,7 @@
 #include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
+#include <term.h>
 #include <unistd.h>
 
 #include "pfl/alloc.h"
@@ -390,9 +391,8 @@ wkthr_main(struct psc_thread *thr)
 		if (exit_from_signal)
 			break;
 	}
-psynclog_debug("dtor");
 	pthread_barrier_wait(&work_barrier);
-psynclog_debug("@@@@@@@@@ CLOSE ALL writefds");
+psynclog_tdebug("dtor");
 	psc_mutex_lock(&mut);
 	if (!finished) {
 		was_me = 1;
@@ -406,14 +406,14 @@ psynclog_debug("@@@@@@@@@ CLOSE ALL writefds");
 			if (i)
 {
 				rpc_send_done(st, 0);
-psynclog_debug("CLOSE %d", st->wfd);
+psynclog_tdebug("CLOSE %d", st->wfd);
 				close(st->wfd);
 }
 
 		/* wait for all other streams to finish */
 		while (psc_atomic32_read(&psync_nrecvthr) > 1)
 			usleep(10000);
-psynclog_debug("done waiting");
+psynclog_tdebug("done waiting");
 
 		/* instruct remaining (first) stream cleanup */
 		st = psc_dynarray_getpos(&streams, 0);
@@ -452,7 +452,7 @@ enqueue_put(int mode, const char *srcfn, const char *orig_dstfn,
 
 	blksz = opt_block_size ? (blksize_t)opt_block_size :
 	    stb->st_blksize;
-blksz = 512 * 1024;
+blksz = 64 * 1024;
 
 	/* sending; push name first */
 	wk = work_getitem(OPC_PUTNAME);
@@ -748,8 +748,6 @@ puppet_mode(void)
 	struct recvthr *rt;
 	struct stream *st;
 
-	opt_streams = 1;
-
 	signal(SIGINT, handle_signal);
 	signal(SIGPIPE, handle_signal);
 
@@ -766,9 +764,11 @@ puppet_mode(void)
 
 	lc_kill(&workq);
 
+psynclog_tdebug("waiting on wkthr");
 	pthread_join(wkthr->pscthr_pthread, NULL);
 
 	fcache_destroy();
+psynclog_tdebug("exit");
 	return (0);
 }
 
@@ -782,11 +782,17 @@ usage(void)
 void
 dispthr_main(struct psc_thread *thr)
 {
-	char ratebuf[PSCFMT_HUMAN_BUFSIZ];
+	char *ce_seq = NULL, ratebuf[PSCFMT_HUMAN_BUFSIZ];
 	struct psc_waitq wq = PSC_WAITQ_INIT;
 	struct timespec ts, start, d;
+	struct timeval dv;
 	double rate;
 	int sec;
+
+	if (tgetent(NULL, NULL) == 1)
+		ce_seq = tgetstr("ce", &ce_seq);
+	if (ce_seq == NULL)
+		ce_seq = "";
 
 	PFL_GETTIMESPEC(&start);
 	ts = start;
@@ -804,11 +810,21 @@ dispthr_main(struct psc_thread *thr)
 		rate = psc_iostats_getintvrate(&iostats, 0);
 
 		psc_fmt_human(ratebuf, rate);
-		printf(" elapsed %02d:%02d:%02d %7s/s\r",
-		    sec / 60 / 60, sec / 60, sec % 60, ratebuf);
+		printf(" %d thr  elapsed %02d:%02d:%02d(s)  %7s/s%s\r",
+		    opt_streams, sec / 60 / 60, sec / 60, sec % 60,
+		    ratebuf, ce_seq);
 		fflush(stdout);
 	}
-	printf("\n");
+	PFL_GETTIMESPEC(&ts);
+	timespecsub(&ts, &start, &d);
+	dv.tv_sec = sec = d.tv_sec;
+	dv.tv_usec = d.tv_nsec / 1000;
+	rate = psc_iostats_calcrate(iostats.ist_len_total, &dv);
+	psc_fmt_human(ratebuf, rate);
+
+	printf("elapsed %02d:%02d:%02d.%02d(s) avg %7s/s%s\n",
+	    sec / 60 / 60, sec / 60, sec % 60,
+	    (int)(d.tv_nsec / 10000000), ratebuf, ce_seq);
 }
 
 int
@@ -1010,6 +1026,7 @@ main(int argc, char *argv[])
 		case OPT_PUPPET:
 			if (!parsenum(&opt_puppet, optarg, 0, 1000000))
 				err(1, "--PUPPET=%s", optarg);
+			opt_streams = 1;
 			break;
 		case OPT_READ_BATCH:	opt_read_batch = optarg;	break;
 		case OPT_SOCKOPTS:	opt_sockopts = optarg;		break;
@@ -1043,7 +1060,6 @@ main(int argc, char *argv[])
 
 	lc_reginit(&workq, struct work, wk_lentry, "workq");
 
-psynclog_debug("str %d", opt_streams);
 	pthread_barrier_init(&work_barrier, NULL, opt_streams);
 
 	if (opt_puppet)

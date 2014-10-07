@@ -435,13 +435,13 @@ psynclog_debug("USERFN [%lx] %s -> %s", h->xid, orig_ufn, ufn);
 		fd = -1;
 	} else if (S_ISREG(pn->pstb.mode)) {
 		objns_makepath(objfn, pn->fid);
-warnx("objfn %s", objfn);
+psynclog_debug("objfn %s", objfn);
 		fd = open(objfn, O_CREAT | O_RDWR, 0600);
 		if (fd == -1) {
 			psynclog_warn("open %s", ufn);
 			return;
 		}
-warnx("ln %s -> %s", ufn, objfn);
+psynclog_debug("ln %s -> %s", ufn, objfn);
 		if (link(objfn, ufn) == -1) {
 			psynclog_warn("link %s", ufn);
 			return;

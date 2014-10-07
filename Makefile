@@ -9,6 +9,6 @@ SRCS+=		psync.c
 SRCS+=		rpc.c
 SRCS+=		stream.c
 SRCS+=		util.c
-MODULES+=	pfl gcrypt
+MODULES+=	pfl gcrypt curses
 
 include ${MAINMK}

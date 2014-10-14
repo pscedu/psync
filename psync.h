@@ -71,7 +71,7 @@ struct walkarg {
 	    "[master] " fmt : "[puppet] " fmt, ##__VA_ARGS__)
 
 #define psynclog_tdebug(fmt, ...)					\
-	psclogs_debug(PSS_TMP, psync_is_master ?			\
+	psclog(PLL_MAX, psync_is_master ?			\
 	    "[master] " fmt : "[puppet] " fmt, ##__VA_ARGS__)
 
 #define psynclog_warn(fmt, ...)						\
@@ -118,6 +118,14 @@ void	  fcache_close(uint64_t);
 void	  fcache_init(void);
 void	  fcache_destroy(void);
 
+
+int	  push_putfile_walkcb(const char *, const struct stat *, int,
+	    int, void *);
+
+void	  psync_chown(const char *, uid_t, gid_t, int);
+void	  psync_chmod(const char *, mode_t, int);
+void	  psync_utimes(const char *, const struct pfl_timespec *, int);
+
 #define stream_sendv(st, opc, iov, nio)					\
 	stream_sendxv((st), 0, (opc), (iov), (nio))
 
@@ -133,9 +141,6 @@ void		 stream_sendx(struct stream *, uint64_t, int, void *,
 void		 stream_sendxv(struct stream *, uint64_t, int,
 		    struct iovec *, int);
 
-int		 push_putfile_walkcb(const char *, const struct stat *,
-		    int, int, void *);
-
 extern struct psc_hashtbl	 fcache;
 
 extern char			 objns_path[PATH_MAX];
@@ -148,9 +153,16 @@ extern psc_atomic32_t		 psync_nrecvthr;
 extern int			 psync_is_master;
 extern int			 psync_rm_objns;
 extern int			 psync_finished;
+extern mode_t			 psync_umask;
+
+extern int			 opt_executability;
+extern int			 opt_group;
+extern int			 opt_owner;
+extern int			 opt_perms;
+extern int			 opt_recursive;
+extern int			 opt_times;
 
 extern int			 opt_puppet;
-extern int			 opt_recursive;
 extern int			 opt_streams;
 
 extern struct psc_dynarray	 streams;

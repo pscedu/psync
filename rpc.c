@@ -80,6 +80,7 @@ rpc_send_putdata(uint64_t fid, off_t off, const void *buf, size_t len)
 	memset(&pd, 0, sizeof(pd));
 	pd.fid = fid;
 	pd.off = off;
+psynclog_tdebug("PUT %lx", pd.fid);
 
 	iov[0].iov_base = &pd;
 	iov[0].iov_len = sizeof(pd);
@@ -101,6 +102,7 @@ rpc_send_putname(const char *dir, const char *fn,
 	struct stream *st;
 
 	memset(&pn, 0, sizeof(pn));
+	pn.fid = stb->st_ino;
 	pn.pstb.dev = stb->st_dev;
 	pn.pstb.rdev = stb->st_rdev;
 	pn.pstb.mode = stb->st_mode;
@@ -208,6 +210,7 @@ rpc_handle_putdata(struct hdr *h, void *buf)
 
 	len = h->msglen - sizeof(*pd);
 
+psynclog_tdebug("HANDLE PUT %lx", pd->fid);
 	fd = fcache_search(pd->fid);
 	rc = pwrite(fd, pd->data, len, pd->off);
 	if (rc != (ssize_t)len)
@@ -368,13 +371,12 @@ userfn_subst(const char *fn)
 void
 rpc_handle_putname(struct hdr *h, void *buf)
 {
+	int fd = -1, flags = 0;
 	char objfn[PATH_MAX], ufn_buf[PATH_MAX];
 	const char *ufn, *dir, *base, *orig_ufn;
 	struct rpc_putname *pn = buf;
-	struct timespec ts[2];
-	struct timeval tv[2];
 	struct stat stb;
-	int fd = -1;
+	mode_t mode;
 
 	// if (pn->dirlen > )
 	//  EINVAL;
@@ -389,7 +391,7 @@ rpc_handle_putname(struct hdr *h, void *buf)
 
 	/* apply incoming name substitutions */
 	ufn = userfn_subst(orig_ufn);
-psynclog_debug("USERFN [%lx] %s -> %s", h->xid, orig_ufn, ufn);
+psynclog_tdebug("USERFN [%lx] %s -> %s", h->xid, orig_ufn, ufn);
 
 	if (S_ISCHR(pn->pstb.mode) ||
 	    S_ISBLK(pn->pstb.mode)) {
@@ -398,7 +400,8 @@ psynclog_debug("USERFN [%lx] %s -> %s", h->xid, orig_ufn, ufn);
 			return;
 		}
 	} else if (S_ISDIR(pn->pstb.mode)) {
-		if (mkdir(ufn, pn->pstb.mode) == -1) {
+		if (mkdir(ufn, pn->pstb.mode) == -1 &&
+		    errno != EEXIST) {
 			psynclog_warn("mkdir %s", ufn);
 			return;
 		}
@@ -413,6 +416,7 @@ psynclog_debug("USERFN [%lx] %s -> %s", h->xid, orig_ufn, ufn);
 			psynclog_warn("symlink %s", ufn);
 			return;
 		}
+		flags |= AT_SYMLINK_NOFOLLOW;
 	} else if (S_ISSOCK(pn->pstb.mode)) {
 		struct sockaddr_un sun;
 
@@ -435,13 +439,13 @@ psynclog_debug("USERFN [%lx] %s -> %s", h->xid, orig_ufn, ufn);
 		fd = -1;
 	} else if (S_ISREG(pn->pstb.mode)) {
 		objns_makepath(objfn, pn->fid);
-psynclog_debug("objfn %s", objfn);
+psynclog_tdebug("objfn %s", objfn);
 		fd = open(objfn, O_CREAT | O_RDWR, 0600);
 		if (fd == -1) {
 			psynclog_warn("open %s", ufn);
 			return;
 		}
-psynclog_debug("ln %s -> %s", ufn, objfn);
+psynclog_tdebug("ln %s -> %s", ufn, objfn);
 		if (link(objfn, ufn) == -1) {
 			psynclog_warn("link %s", ufn);
 			return;
@@ -453,56 +457,23 @@ psynclog_debug("ln %s -> %s", ufn, objfn);
 		return;
 	}
 
-#ifdef HAVE_FUTIMENS
-	(void)tv;
-	ts[0].tv_sec = pn->pstb.atim.tv_sec;
-	ts[0].tv_nsec = pn->pstb.atim.tv_nsec;
+	if (opt_owner || opt_group)
+		psync_chown(ufn, pn->pstb.uid, pn->pstb.gid, flags);
 
-	ts[1].tv_sec = pn->pstb.mtim.tv_nsec;
-	ts[1].tv_nsec = pn->pstb.mtim.tv_nsec;
-#else
-	(void)ts;
-	tv[0].tv_sec = pn->pstb.atim.tv_sec;
-	tv[0].tv_usec = pn->pstb.atim.tv_nsec / 1000;
+	mode = S_ISDIR(pn->pstb.mode) ? 0777 : 0666;
+	if (opt_perms)
+		mode = pn->pstb.mode;
+	else if (opt_executability)
+		mode |= pn->pstb.mode & _S_IXUGO;
+	psync_chmod(ufn, mode & ~psync_umask, flags);
 
-	tv[1].tv_sec = pn->pstb.atim.tv_sec;
-	tv[1].tv_usec = pn->pstb.atim.tv_nsec / 1000;
-#endif
+	if (opt_times)
+		psync_utimes(ufn, pn->pstb.tim, flags);
 
-	/* BSD file flags */
-	/* MacOS setattrlist */
-	/* linux file attributes: FS_IOC_GETFLAGS */
-	/* extattr */
-
-	if (fd == -1) {
-		if (lchown(ufn, pn->pstb.uid, pn->pstb.gid) == -1)
-			psynclog_warn("chown %s", ufn);
-		if (lchmod(ufn, pn->pstb.mode) == -1)
-			psynclog_warn("chmod %s", ufn);
-
-#ifdef HAVE_FUTIMENS
-		if (utimensat(AT_FDCWD, ufn, ts,
-		    AT_SYMLINK_NOFOLLOW) == -1)
-			psynclog_warn("utimens %s", ufn);
-#else
-		if (lutimes(ufn, tv) == -1)
-			psynclog_warn("utimes %s", ufn);
-#endif
-
-	} else {
-		if (fchown(fd, pn->pstb.uid, pn->pstb.gid) == -1)
-			psynclog_warn("chown %s", ufn);
-		if (fchmod(fd, pn->pstb.mode) == -1)
-			psynclog_warn("chmod %s", ufn);
-
-#ifdef HAVE_FUTIMENS
-		if (futimens(fd, ts) == -1)
-			psynclog_warn("utimens %s", ufn);
-#else
-		if (futimes(fd, tv) == -1)
-			psynclog_warn("utimes %s", ufn);
-#endif
-	}
+	/* XXX BSD file flags */
+	/* XXX MacOS setattrlist */
+	/* XXX linux file attributes: FS_IOC_GETFLAGS */
+	/* XXX extattr */
 }
 
 void

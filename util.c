@@ -1,7 +1,10 @@
 /* $Id$ */
 /* %PSC_COPYRIGHT% */
 
+#include <sys/stat.h>
+
 #include <ctype.h>
+#include <fcntl.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -96,4 +99,46 @@ parsesize(uint64_t *p, const char *s, uint64_t base)
 	}
 	*p = l * base;
 	return (1);
+}
+
+void
+psync_chown(const char *fn, uid_t uid, gid_t gid, int flags)
+{
+	if (fchownat(AT_FDCWD, fn, uid, gid, flags))
+		psynclog_warn("chown %s", fn);
+}
+
+void
+psync_chmod(const char *fn, mode_t mode, int flags)
+{
+	if (fchmodat(AT_FDCWD, fn, mode, flags))
+		psynclog_warn("chmod %s", fn);
+}
+
+void
+psync_utimes(const char *fn, const struct pfl_timespec *pts, int flags)
+{
+#ifdef HAVE_FUTIMENS
+	struct timespec ts[2];
+
+	ts[0].tv_sec = pts[0].tv_sec;
+	ts[0].tv_nsec = pts[0].tv_nsec;
+
+	ts[1].tv_sec = pts[1].tv_sec;
+	ts[1].tv_nsec = pts[1].tv_nsec;
+
+	if (utimensat(AT_FDCWD, fn, ts, flags) == -1)
+		psynclog_warn("utimes %s", fn);
+#else
+	struct timeval tv[2];
+
+	tv[0].tv_sec = pts[0].tv_sec;
+	tv[0].tv_usec = pts[0].tv_nsec / 1000;
+
+	tv[1].tv_sec = pts[1].tv_sec;
+	tv[1].tv_usec = pts[1].tv_nsec / 1000;
+
+	if (lutimes(ufn, tv) == -1)
+		psynclog_warn("utimes %s", ufn);
+#endif
 }

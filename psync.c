@@ -126,7 +126,7 @@ int			 opt_delete_excluded;
 int			 opt_devices;
 int			 opt_dirs;
 int			 opt_dry_run;
-int			 opt_excutability;
+int			 opt_executability;
 int			 opt_existing;
 int			 opt_extended_attributes;
 int			 opt_force;
@@ -166,13 +166,16 @@ int			 opt_size_only;
 int			 opt_sparse;
 int			 opt_specials;
 int			 opt_stats;
-int			 opt_streams;
 int			 opt_super;
 int			 opt_timeout;		/* in seconds */
 int			 opt_times;
 int			 opt_update;
 int			 opt_verbose;
 int			 opt_whole_file;
+
+/* psync specific options */
+int			 opt_streams;
+const char		*opt_dstdir;
 
 struct psc_dynarray	 opt_exclude = DYNARRAY_INIT;
 struct psc_dynarray	 opt_files = DYNARRAY_INIT;
@@ -195,6 +198,7 @@ int			 psync_is_master;	/* otherwise, is RPC puppet */
 int			 psync_rm_objns;
 int			 psync_finished;
 psc_atomic32_t		 psync_nrecvthr;
+mode_t			 psync_umask;
 
 #define NO_ARG		no_argument
 #define REQARG		required_argument
@@ -224,12 +228,15 @@ enum {
 	OPT_PASSWORD_FILE,
 	OPT_PORT,
 	OPT_PSYNC_PATH,
-	OPT_PUPPET,
 	OPT_READ_BATCH,
 	OPT_SOCKOPTS,
 	OPT_SUFFIX,
 	OPT_TIMEOUT,
-	OPT_WRITE_BATCH
+	OPT_WRITE_BATCH,
+
+	/* psync specific options */
+	OPT_DSTDIR,
+	OPT_PUPPET
 };
 
 struct option opts[] = {
@@ -266,7 +273,7 @@ struct option opts[] = {
 	{ "dry-run",		NO_ARG,	NULL,			'n' },
 	{ "exclude",		REQARG,	NULL,			OPT_EXCLUDE },
 	{ "exclude-from",	REQARG,	NULL,			OPT_EXCLUDE_FROM },
-	{ "executability",	NO_ARG,	&opt_excutability,	1 },
+	{ "executability",	NO_ARG,	&opt_executability,	1 },
 	{ "existing",		NO_ARG,	&opt_existing,		1 },
 	{ "extended-attributes",NO_ARG,	NULL,			'E' },
 	{ "files-from",		REQARG,	NULL,			OPT_FILES_FROM },
@@ -323,7 +330,6 @@ struct option opts[] = {
 	{ "sparse",		NO_ARG,	NULL,			'S' },
 	{ "specials",		NO_ARG,	&opt_specials,		1 },
 	{ "stats",		NO_ARG,	&opt_stats,		1 },
-	{ "streams",		REQARG,	&opt_streams,		'N' },
 	{ "suffix",		REQARG,	NULL,			OPT_SUFFIX },
 	{ "super",		NO_ARG,	&opt_super,		1 },
 	{ "temp-dir",		REQARG,	NULL,			'T' },
@@ -334,6 +340,11 @@ struct option opts[] = {
 	{ "version",		NO_ARG,	NULL,			'V' },
 	{ "whole-file",		NO_ARG,	NULL,			'W' },
 	{ "write-batch",	REQARG,	NULL,			OPT_WRITE_BATCH },
+
+	/* psync specific options */
+	{ "dstdir",		REQARG,	NULL,			OPT_DSTDIR },
+	{ "streams",		REQARG,	&opt_streams,		'N' },
+
 	{ NULL,			0,	NULL,			0 }
 };
 
@@ -392,7 +403,7 @@ wkthr_main(struct psc_thread *thr)
 			break;
 	}
 	pthread_barrier_wait(&work_barrier);
-psynclog_tdebug("dtor");
+
 	psc_mutex_lock(&mut);
 	if (!finished) {
 		was_me = 1;
@@ -403,12 +414,10 @@ psynclog_tdebug("dtor");
 	if (was_me) {
 		/* close all but first stream */
 		DYNARRAY_FOREACH(st, i, &streams)
-			if (i)
-{
+			if (i) {
 				rpc_send_done(st, 0);
-psynclog_tdebug("CLOSE %d", st->wfd);
 				close(st->wfd);
-}
+			}
 
 		/* wait for all other streams to finish */
 		while (psc_atomic32_read(&psync_nrecvthr) > 1)
@@ -464,7 +473,8 @@ psynclog_debug("DSTFN %s", wk->wk_basefn);
 psynclog_debug("DSTDIR %s", wk->wk_fn);
 	lc_add(&workq, wk);
 
-	// S_ISREG()
+	if (!S_ISREG(stb->st_mode))
+		return;
 
 	fh = PSCALLOC(sizeof(*fh));
 	fh->fd = open(srcfn, O_RDONLY);
@@ -496,6 +506,9 @@ psynclog_debug("DSTDIR %s", wk->wk_fn);
 
 		wk = work_getitem(OPC_PUTDATA);
 		wk->wk_fh = fh;
+
+		wk->wk_stb.st_ino = stb->st_ino;
+		wk->wk_stb.st_size = stb->st_size;
 
 		spinlock(&fh->lock);
 		fh->refcnt++;
@@ -748,6 +761,15 @@ puppet_mode(void)
 	struct recvthr *rt;
 	struct stream *st;
 
+	if (chdir(opt_dstdir) == -1) {
+		if (errno != EEXIST)
+			psync_fatal("%s", opt_dstdir);
+		if (mkdir(opt_dstdir, 0755) == -1)
+			psync_fatal("%s", opt_dstdir);
+		if (chdir(opt_dstdir) == -1)
+			psync_fatal("%s", opt_dstdir);
+	}
+
 	signal(SIGINT, handle_signal);
 	signal(SIGPIPE, handle_signal);
 
@@ -876,7 +898,6 @@ getnstreams(int want)
 	{
 		double avg;
 
-
 		if (getloadavg(&avg, 1) == -1)
 			psynclog_warn("getloadavg");
 
@@ -891,7 +912,7 @@ int
 main(int argc, char *argv[])
 {
 	int mode, flags, i, rv, rc = 0, c;
-	char *p, *fn, *host, *dstfn;
+	char *p, *fn, *host, *dstfn, *dstdir;
 	struct psc_dynarray threads = DYNARRAY_INIT;
 	struct psc_thread *thr;
 
@@ -1023,11 +1044,6 @@ main(int argc, char *argv[])
 		case OPT_PARTIAL_DIR:	opt_partial_dir = optarg;	break;
 		case OPT_PASSWORD_FILE:	opt_password_file = optarg;	break;
 		case OPT_PSYNC_PATH:	opt_psync_path = optarg;	break;
-		case OPT_PUPPET:
-			if (!parsenum(&opt_puppet, optarg, 0, 1000000))
-				err(1, "--PUPPET=%s", optarg);
-			opt_streams = 1;
-			break;
 		case OPT_READ_BATCH:	opt_read_batch = optarg;	break;
 		case OPT_SOCKOPTS:	opt_sockopts = optarg;		break;
 		case OPT_SUFFIX:	opt_suffix = optarg;		break;
@@ -1036,6 +1052,15 @@ main(int argc, char *argv[])
 				err(1, "--timeout=%s", optarg);
 			break;
 		case OPT_WRITE_BATCH:	opt_write_batch = optarg;	break;
+
+		/* psync specific options */
+		case OPT_DSTDIR:	opt_dstdir = optarg;		break;
+		case OPT_PUPPET:
+			if (!parsenum(&opt_puppet, optarg, 0, 1000000))
+				err(1, "--PUPPET=%s", optarg);
+			opt_streams = 1;
+			break;
+
 		case 0:
 			break;
 		default:
@@ -1045,6 +1070,9 @@ main(int argc, char *argv[])
 	}
 	argc -= optind;
 	argv += optind;
+
+	psync_umask = umask(0);
+	umask(psync_umask);
 
 	pscthr_init(THRT_MAIN, 0, NULL, NULL, 0, "main");
 
@@ -1086,6 +1114,15 @@ main(int argc, char *argv[])
 		*dstfn++ = '\0';
 		host = p;
 		mode = MODE_PUT;
+
+		dstdir = dstfn;
+		dstfn = strrchr(dstfn, '/');
+		if (dstfn)
+			*dstfn++ = '\0';
+		else {
+			dstfn = dstdir;
+			dstdir = ".";
+		}
 	} else {
 		struct stat stb;
 
@@ -1121,9 +1158,9 @@ main(int argc, char *argv[])
 	psc_iostats_init(&iostats, "iostats");
 	psc_tiosthr_spawn(THRT_TIOS, "tios");
 
-	do {
+	do
 		opt_puppet = psc_random32u(1000000);
-	} while (!opt_puppet);
+	while (!opt_puppet);
 
 	for (i = 0; i < opt_streams; i++) {
 		struct recvthr *rt;
@@ -1136,15 +1173,18 @@ main(int argc, char *argv[])
 		/* spawning multiple ssh too quickly fails */
 		if (i)
 			usleep(30000);
+psynclog_tdebug("spawn");
 
 		/*
-		 * add:
-		 *	-r
-		 *	--sparse
+		 * XXX add:
 		 *	--exclude filter patterns
 		 */
-		st = stream_cmdopen("%s %s %s --PUPPET=%d",
-		    opt_rsh, host, opt_psync_path, opt_puppet);
+		st = stream_cmdopen("%s %s %s --PUPPET=%d --dstdir=%s "
+		    "%s %s %s",
+		    opt_rsh, host, opt_psync_path, opt_puppet, dstdir,
+		    opt_recursive	? "-r" : "",
+		    opt_perms		? "-p" : "",
+		    opt_sparse		? "-S" : "");
 
 		psc_dynarray_add(&streams, st);
 

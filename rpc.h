@@ -28,8 +28,9 @@ struct rpc_sub_stat {
 	uint32_t		gid;
 	uint32_t		_pad;
 	uint64_t		size;
-	struct pfl_timespec	atim;	/* access time */
-	struct pfl_timespec	mtim;	/* modify (data) time */
+	struct pfl_timespec	tim[2];
+#define atim tim[0]			/* access time */
+#define mtim tim[1]			/* modify (data) time */
 };
 
 struct rpc_generic_rep {

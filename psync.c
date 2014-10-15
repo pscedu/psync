@@ -599,8 +599,13 @@ walkfiles(int mode, const char *srcfn, int flags, const char *dstfn)
 
 	if (mode == MODE_PUT) {
 		struct walkarg wa;
+		char *p;
 
-		wa.trim = strlen(srcfn);
+		p = strrchr(srcfn, '/');
+		if (p)
+			wa.trim = p - srcfn;
+		else
+			wa.trim = 0; 
 		wa.prefix = dstfn;
 		return (pfl_filewalk(srcfn, flags, NULL,
 		    push_putfile_walkcb, &wa));
@@ -1143,9 +1148,11 @@ main(int argc, char *argv[])
 
 		dstdir = dstfn;
 		dstfn = strrchr(dstfn, '/');
-		if (dstfn)
+		if (dstfn) {
 			*dstfn++ = '\0';
-		else {
+			if (dstfn[0] == '\0')
+				dstfn = ".";
+		} else {
 			dstfn = dstdir;
 			dstdir = ".";
 		}

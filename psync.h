@@ -152,7 +152,8 @@ extern psc_atomic32_t		 psync_xid;
 extern psc_atomic32_t		 psync_nrecvthr;
 extern int			 psync_is_master;
 extern int			 psync_rm_objns;
-extern int			 psync_finished;
+extern int			 psync_send_finished;
+extern int			 psync_recv_finished;
 extern mode_t			 psync_umask;
 
 extern int			 opt_executability;
@@ -171,5 +172,9 @@ extern struct psc_poolmaster	 buf_poolmaster;
 extern struct psc_poolmgr	*buf_pool;
 
 extern struct psc_iostats	 iostats;
+
+extern int			 nfilehandles;
+extern struct psc_spinlock	 filehandles_lock;
+extern struct psc_waitq		 filehandles_waitq;
 
 #endif /* _PSYNC_H_ */

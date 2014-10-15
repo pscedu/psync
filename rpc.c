@@ -133,6 +133,7 @@ rpc_send_done(struct stream *st, int clean)
 {
 	struct rpc_done d;
 	struct iovec iov;
+psynclog_tdebug("send_done");
 
 	d.clean = clean;
 
@@ -160,20 +161,25 @@ rpc_handle_getfile_req(struct hdr *h, void *buf)
 	gfq->fn[end - 1] = '\0';
 
 	if (stat(gfq->fn, &stb) == 0) {
+		size_t len;
+		char *p;
+
 		flags = PFL_FILEWALKF_RELPATH;
 
-		wa.trim = strlen(gfq->fn);
-		if (S_ISDIR(stb.st_mode) && opt_recursive) {
+		p = strrchr(gfq->fn, '/');
+		if (p)
+			wa.trim = p - gfq->fn;
+		else
+			wa.trim = 0;
+		wa.prefix = ".";
+		if (S_ISDIR(stb.st_mode) && opt_recursive)
 			flags |= PFL_FILEWALKF_RECURSIVE;
-			wa.prefix = NULL;
-		} else {
-			wa.prefix = NULL; // gfq->fn
-		}
 
 		gfp.rc = pfl_filewalk(gfq->fn, flags, NULL,
 		    push_putfile_walkcb, &wa);
 	} else {
 		gfp.rc = errno;
+psynclog_tdebug("getfile %d", errno);
 	}
 
 	st = stream_get();
@@ -480,14 +486,14 @@ void
 rpc_handle_done(struct hdr *h, void *buf)
 {
 	struct rpc_done *d = buf;
-psynclog_debug("handle_done");
 
 	(void)h;
 	(void)buf;
 
 	if (d->clean)
 		psync_rm_objns = 1;
-	psync_finished = 1;
+	psync_recv_finished = 1;
+psynclog_tdebug("psync_recv_finished=1");
 }
 
 typedef void (*op_handler_t)(struct hdr *, void *);
@@ -545,14 +551,12 @@ recvthr_main(struct psc_thread *thr)
 			break;
 		ops[hdr.opc](&hdr, buf);
 
-		if (exit_from_signal || psync_finished)
+		if (exit_from_signal || psync_recv_finished)
 			break;
 	}
-psynclog_debug("CLOSE %d\n", rt->st->rfd);
-	close(rt->st->rfd);
 
-	if (!psync_is_master)
-		rpc_send_done(rt->st, 0);
+psynclog_tdebug("recv done, CLOSE %d", rt->st->rfd);
+	close(rt->st->rfd);
 
 	psc_atomic32_dec(&psync_nrecvthr);
 }

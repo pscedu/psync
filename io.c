@@ -1,4 +1,10 @@
 /* $Id$ */
+/* %PSC_COPYRIGHT% */
+
+/*
+ * The I/O routines here are for writing data to files on the local file
+ * system that was received via RPCs.
+ */
 
 #include <sys/param.h>
 #include <sys/stat.h>

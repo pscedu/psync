@@ -377,10 +377,10 @@ proc_work(struct work *wk)
 {
 	switch (wk->wk_type) {
 	case OPC_GETFILE_REQ:
-		rpc_send_getfile(wk->wk_xid, wk->wk_fn);
+		rpc_send_getfile(wk->wk_xid, wk->wk_fn, wk->wk_basefn);
 		break;
 	case OPC_PUTDATA:
-psynclog_tdebug("PUTDATA");
+//psynclog_tdebug("PUTDATA");
 		if (opt_sparse == 0 || !pfl_memchk(wk->wk_fh->base +
 		    wk->wk_off, 0, wk->wk_len))
 			rpc_send_putdata(wk->wk_stb.st_ino, wk->wk_off,
@@ -550,7 +550,7 @@ push_putfile_walkcb(const char *fn, const struct stat *stb,
 {
 	struct walkarg *wa = arg;
 	char *p, dstfn_buf[PATH_MAX];
-	const char *dstfn;
+	const char *dstfn, *t;
 	int rc = 0;
 
 #if 0
@@ -566,9 +566,12 @@ push_putfile_walkcb(const char *fn, const struct stat *stb,
 		return;
 	}
 #endif
-
+	t = fn + wa->trim;
+	while (*t == '/')
+		t++;
 	snprintf(dstfn_buf, sizeof(dstfn_buf), "%s/%s",
-	    wa->prefix, fn + wa->trim);
+	    wa->prefix, t);
+psynclog_tdebug("dstfn_buf %s", dstfn_buf);
 	p = strrchr(dstfn_buf, '/');
 	*p = '\0';
 	dstfn = dstfn_buf;
@@ -605,7 +608,7 @@ walkfiles(int mode, const char *srcfn, int flags, const char *dstfn)
 		if (p)
 			wa.trim = p - srcfn;
 		else
-			wa.trim = 0; 
+			wa.trim = 0;
 		wa.prefix = dstfn;
 		return (pfl_filewalk(srcfn, flags, NULL,
 		    push_putfile_walkcb, &wa));
@@ -631,8 +634,9 @@ walkfiles(int mode, const char *srcfn, int flags, const char *dstfn)
 
 	wk = work_getitem(OPC_GETFILE_REQ);
 	wk->wk_xid = psc_atomic32_inc_getnew(&psync_xid);
-psynclog_debug("MAP %lx -> %s", wk->wk_xid, finalfn);
+psynclog_tdebug("MAP %lx -> %s", wk->wk_xid, finalfn);
 	strlcpy(wk->wk_fn, srcfn, sizeof(wk->wk_fn));
+	strlcpy(wk->wk_basefn, finalfn, sizeof(wk->wk_basefn));
 //	if (!opt_partial)
 //		truncate(finalfn, 0);
 	lc_add(&workq, wk);
@@ -1165,7 +1169,10 @@ main(int argc, char *argv[])
 			dstfn = "";
 		} else {
 			dstfn = strrchr(p, '/');
-			if (dstfn > p)
+			if (dstfn == NULL) {
+				dstfn = p;
+				p = NULL;
+			} else if (dstfn > p)
 				*dstfn++ = '\0';
 			else
 				p = NULL;

@@ -40,11 +40,10 @@ struct rpc_generic_rep {
 };
 
 struct rpc_getfile_req {
-	char			fn[0];
-	/*
-	 * Followed by file basename, used if not already specified
-	 * locally.
-	 */
+	 int32_t		len;
+	 int32_t		_pad;
+	char			fn[0];	/* relative path */
+//	char			base[0];/* destination basename (optional) */
 };
 
 #define rpc_getfile_rep rpc_generic_rep
@@ -92,7 +91,7 @@ struct rpc_done {
 };
 
 void rpc_send_done(struct stream *, int);
-void rpc_send_getfile(uint64_t, const char *);
+void rpc_send_getfile(uint64_t, const char *, const char *);
 void rpc_send_putdata(uint64_t, off_t, const void *, size_t);
 void rpc_send_putname(const char *, const char *, const struct stat *);
 

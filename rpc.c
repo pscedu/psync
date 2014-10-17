@@ -50,10 +50,10 @@ buf_get(size_t len)
 #define buf_release(b)	psc_pool_return(buf_pool, (b))
 
 void
-rpc_send_getfile(uint64_t xid, const char *fn)
+rpc_send_getfile(uint64_t xid, const char *fn, const char *base)
 {
 	struct rpc_getfile_req gfq;
-	struct iovec iov[2];
+	struct iovec iov[3];
 	struct stream *st;
 
 	memset(&gfq, 0, sizeof(gfq));
@@ -62,8 +62,11 @@ rpc_send_getfile(uint64_t xid, const char *fn)
 	iov[0].iov_len = sizeof(gfq);
 
 	iov[1].iov_base = (void *)fn;
-	iov[1].iov_len = strlen(fn) + 1;
-psynclog_debug("SEND GETFILE %lx", xid);
+	iov[1].iov_len = gfq.len = strlen(fn) + 1;
+psynclog_tdebug("SEND GETFILE %lx", xid);
+
+	iov[2].iov_base = (void *)base;
+	iov[2].iov_len = strlen(fn) + 1;
 
 	st = stream_get();
 	stream_sendxv(st, xid, OPC_GETFILE_REQ, iov, nitems(iov));
@@ -80,7 +83,7 @@ rpc_send_putdata(uint64_t fid, off_t off, const void *buf, size_t len)
 	memset(&pd, 0, sizeof(pd));
 	pd.fid = fid;
 	pd.off = off;
-psynclog_tdebug("PUT %lx", pd.fid);
+//psynclog_tdebug("PUT %lx", pd.fid);
 
 	iov[0].iov_base = &pd;
 	iov[0].iov_len = sizeof(pd);
@@ -153,15 +156,12 @@ rpc_handle_getfile_req(struct hdr *h, void *buf)
 	struct stream *st;
 	struct walkarg wa;
 	struct stat stb;
-	size_t end;
+	char *base;
 	int flags;
 
-	end = LASTFIELDLEN(h, struct rpc_getfile_req);
-	// assert(end > 0)
-	gfq->fn[end - 1] = '\0';
+	base = gfq->fn + gfq->len;
 
 	if (stat(gfq->fn, &stb) == 0) {
-		size_t len;
 		char *p;
 
 		flags = PFL_FILEWALKF_RELPATH;
@@ -171,7 +171,7 @@ rpc_handle_getfile_req(struct hdr *h, void *buf)
 			wa.trim = p - gfq->fn;
 		else
 			wa.trim = 0;
-		wa.prefix = ".";
+		wa.prefix = base[0] ? base : ".";
 		if (S_ISDIR(stb.st_mode) && opt_recursive)
 			flags |= PFL_FILEWALKF_RECURSIVE;
 
@@ -216,7 +216,7 @@ rpc_handle_putdata(struct hdr *h, void *buf)
 
 	len = h->msglen - sizeof(*pd);
 
-psynclog_tdebug("HANDLE PUT %lx", pd->fid);
+//psynclog_tdebug("HANDLE PUT %lx", pd->fid);
 	fd = fcache_search(pd->fid);
 	rc = pwrite(fd, pd->data, len, pd->off);
 	if (rc != (ssize_t)len)

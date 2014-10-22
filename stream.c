@@ -51,15 +51,6 @@ atomicio(int op, int fd, void *buf, size_t len)
 }
 
 void
-stream_init(struct stream *st, int rfd, int wfd)
-{
-	memset(st, 0, sizeof(*st));
-	st->rfd = rfd;
-	st->wfd = wfd;
-	psc_mutex_init(&st->mut);
-}
-
-void
 stream_sendxv(struct stream *st, uint64_t xid, int opc,
     struct iovec *iov, int nio)
 {
@@ -89,12 +80,6 @@ stream_sendx(struct stream *st, uint64_t xid, int opc, void *p,
 	iov.iov_base = p;
 	iov.iov_len = len;
 	stream_sendxv(st, xid, opc, &iov, 1);
-}
-
-void
-stream_release(struct stream *st)
-{
-	psc_mutex_unlock(&st->mut);
 }
 
 struct stream *
@@ -134,25 +119,6 @@ stream_cmdopen(const char *fmt, ...)
 }
 
 struct stream *
-stream_get(void)
-{
-	struct stream *st;
-	int i, rnd;
-
-	rnd = psc_random32u(opt_streams);
-
-	for (;;) {
-		// XXX should do a real shuffle
-		DYNARRAY_FOREACH(st, i, &streams) {
-			st = psc_dynarray_getpos(&streams, (i + rnd) %
-			    psc_dynarray_len(&streams));
-			if (psc_mutex_trylock(&st->mut))
-				return (st);
-		}
-	}
-}
-
-struct stream *
 stream_create(int rfd, int wfd)
 {
 	struct stream *st;
@@ -160,6 +126,5 @@ stream_create(int rfd, int wfd)
 	st = PSCALLOC(sizeof(*st));
 	st->rfd = rfd;
 	st->wfd = wfd;
-	psc_mutex_init(&st->mut);
 	return (st);
 }

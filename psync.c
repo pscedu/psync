@@ -49,10 +49,9 @@
 #include "pfl/types.h"
 #include "pfl/walk.h"
 
+#include "options.h"
 #include "psync.h"
 #include "rpc.h"
-
-#define MAX_STREAMS	64
 
 #define MODE_GET	0
 #define MODE_PUT	1
@@ -70,119 +69,18 @@ struct work {
 	struct stat		  wk_stb;
 	uint64_t		  wk_xid;
 	off_t			  wk_off;
-	void			(*wk_cb)(struct work *);
 };
 
 enum {
 	THRT_DISP,
 	THRT_MAIN,
-	THRT_RECV,
+	THRT_RCV,
 	THRT_TIOS,
-	THRT_WK
+	THRT_WKR
 };
 
 const char		*progname;
 
-const char		*opt_address;
-uint64_t		 opt_block_size;
-const char		*opt_chmod;
-const char		*opt_compare_dest;
-const char		*opt_copy_dest;
-const char		*opt_link_dest;
-const char		*opt_log_file;
-const char		*opt_log_file_format;
-int			 opt_max_delete;
-uint64_t		 opt_max_size;
-uint64_t		 opt_min_size;
-int			 opt_modify_window;
-const char		*opt_out_format;
-const char		*opt_partial_dir;
-const char		*opt_password_file;
-const char		*opt_psync_path = "psync";
-const char		*opt_read_batch;
-const char		*opt_rsh = "ssh -oControlPath=none -oKbdInteractiveAuthentication=no";
-const char		*opt_sockopts;
-const char		*opt_suffix;
-const char		*opt_temp_dir;
-const char		*opt_write_batch;
-int			 opt_8_bit_output;
-int			 opt_append;
-int			 opt_backup;
-int			 opt_blocking_io;
-uint64_t		 opt_bwlimit;
-int			 opt_cache;
-int			 opt_checksum;
-int			 opt_compress;
-int			 opt_compress_level;
-int			 opt_copy_dirlinks;
-int			 opt_copy_links;
-int			 opt_copy_unsafe_links;
-int			 opt_cvs_exclude;
-int			 opt_del;
-int			 opt_delay_updates;
-int			 opt_delete;
-int			 opt_delete_after;
-int			 opt_delete_before;
-int			 opt_delete_during;
-int			 opt_delete_excluded;
-int			 opt_devices;
-int			 opt_dirs;
-int			 opt_dry_run;
-int			 opt_executability;
-int			 opt_existing;
-int			 opt_extended_attributes;
-int			 opt_force;
-int			 opt_from0;
-int			 opt_fuzzy;
-int			 opt_group;
-int			 opt_hard_links;
-int			 opt_human_readable;
-int			 opt_ignore_errors;
-int			 opt_ignore_existing;
-int			 opt_ignore_times;
-int			 opt_inplace;
-int			 opt_ipv4;
-int			 opt_ipv6;
-int			 opt_itemize_changes;
-int			 opt_keep_dirlinks;
-int			 opt_links;
-int			 opt_list_only;
-int			 opt_no_implied_dirs;
-int			 opt_numeric_ids;
-int			 opt_omit_dir_times;
-int			 opt_one_file_system;
-int			 opt_owner;
-int			 opt_partial;
-int			 opt_perms;
-int			 opt_port;
-int			 opt_progress = 1;
-int			 opt_prune_empty_dirs;
-int			 opt_puppet;
-int			 opt_quiet;
-int			 opt_recursive;
-int			 opt_relative;
-int			 opt_remove_source_file;
-int			 opt_remove_source_files;
-int			 opt_safe_links;
-int			 opt_size_only;
-int			 opt_sparse;
-int			 opt_specials;
-int			 opt_stats;
-int			 opt_super;
-int			 opt_timeout;		/* in seconds */
-int			 opt_times;
-int			 opt_update;
-int			 opt_verbose;
-int			 opt_whole_file;
-
-/* psync specific options */
-int			 opt_streams;
-const char		*opt_dstdir;
-
-struct psc_dynarray	 opt_exclude = DYNARRAY_INIT;
-struct psc_dynarray	 opt_files = DYNARRAY_INIT;
-struct psc_dynarray	 opt_filter = DYNARRAY_INIT;
-struct psc_dynarray	 opt_include = DYNARRAY_INIT;
 
 struct psc_poolmaster	 buf_poolmaster;
 struct psc_poolmgr	*buf_pool;
@@ -203,156 +101,8 @@ int			 psync_is_master;	/* otherwise, is RPC puppet */
 int			 psync_rm_objns;
 int			 psync_send_finished;
 int			 psync_recv_finished;
-psc_atomic32_t		 psync_nrecvthr;
+psc_atomic32_t		 psync_nrcvthr;
 mode_t			 psync_umask;
-
-#define NO_ARG		no_argument
-#define REQARG		required_argument
-
-enum {
-	OPT_ADDRESS = 'z' + 1,
-	OPT_BWLIMIT,
-	OPT_CHMOD,
-	OPT_COMPARE_DEST,
-	OPT_COMPRESS_LEVEL,
-	OPT_COPY_DEST,
-	OPT_EXCLUDE,
-	OPT_EXCLUDE_FROM,
-	OPT_FILES_FROM,
-	OPT_INCLUDE,
-	OPT_INCLUDE_FROM,
-	OPT_LINK_DEST,
-	OPT_LOG_FILE,
-	OPT_LOG_FILE_FORMAT,
-	OPT_MAX_DELETE,
-	OPT_MAX_SIZE,
-	OPT_MIN_SIZE,
-	OPT_MODIFY_WINDOW,
-	OPT_ONLY_WRITE_BATCH,
-	OPT_OUT_FORMAT,
-	OPT_PARTIAL_DIR,
-	OPT_PASSWORD_FILE,
-	OPT_PORT,
-	OPT_PSYNC_PATH,
-	OPT_READ_BATCH,
-	OPT_SOCKOPTS,
-	OPT_SUFFIX,
-	OPT_TIMEOUT,
-	OPT_WRITE_BATCH,
-
-	/* psync specific options */
-	OPT_DSTDIR,
-	OPT_PUPPET
-};
-
-struct option opts[] = {
-	{ "8-bit-output",	NO_ARG,	NULL,			'8' },
-	{ "PUPPET",		REQARG,	NULL,			OPT_PUPPET },
-	{ "address",		REQARG,	NULL,			OPT_ADDRESS },
-	{ "append",		NO_ARG,	&opt_append,		1 },
-	{ "archive",		NO_ARG,	NULL,			'a' },
-	{ "backup",		NO_ARG,	NULL,			'b' },
-	{ "backup-dir",		NO_ARG,	NULL,			1 },
-	{ "block-size",		REQARG,	NULL,			'B' },
-	{ "blocking-io",	NO_ARG,	&opt_blocking_io,	1 },
-	{ "bwlimit",		REQARG,	NULL,			OPT_BWLIMIT },
-	{ "cache",		NO_ARG,	&opt_cache,		1 },
-	{ "checksum",		NO_ARG,	NULL,			'c' },
-	{ "chmod",		REQARG,	NULL,			OPT_CHMOD },
-	{ "compare-dest",	REQARG,	NULL,			OPT_COMPARE_DEST },
-	{ "compress",		NO_ARG,	NULL,			'z' },
-	{ "compress-level",	REQARG,	NULL,			OPT_COMPRESS_LEVEL },
-	{ "copy-dest",		REQARG,	NULL,			OPT_COPY_DEST },
-	{ "copy-dirlinks",	NO_ARG,	NULL,			'k' },
-	{ "copy-links",		NO_ARG,	NULL,			'L' },
-	{ "copy-unsafe-links",	NO_ARG,	&opt_copy_unsafe_links,	1 },
-	{ "cvs-exclude",	NO_ARG,	NULL,			'C' },
-	{ "del",		NO_ARG,	&opt_del,		1 },
-	{ "delay-updates",	NO_ARG,	&opt_delay_updates,	1 },
-	{ "delete",		NO_ARG,	&opt_delete,		1 },
-	{ "delete-after",	NO_ARG,	&opt_delete_after,	1 },
-	{ "delete-before",	NO_ARG,	&opt_delete_before,	1 },
-	{ "delete-during",	NO_ARG,	&opt_delete_during,	1 },
-	{ "delete-excluded",	NO_ARG,	&opt_delete_excluded,	1 },
-	{ "devices",		NO_ARG,	&opt_devices,		1 },
-	{ "dirs",		NO_ARG,	NULL,			'd' },
-	{ "dry-run",		NO_ARG,	NULL,			'n' },
-	{ "exclude",		REQARG,	NULL,			OPT_EXCLUDE },
-	{ "exclude-from",	REQARG,	NULL,			OPT_EXCLUDE_FROM },
-	{ "executability",	NO_ARG,	&opt_executability,	1 },
-	{ "existing",		NO_ARG,	&opt_existing,		1 },
-	{ "extended-attributes",NO_ARG,	NULL,			'E' },
-	{ "files-from",		REQARG,	NULL,			OPT_FILES_FROM },
-	{ "filter",		REQARG,	NULL,			'f' },
-	{ "force",		NO_ARG,	&opt_force,		1 },
-	{ "from0",		NO_ARG,	NULL,			'0' },
-	{ "fuzzy",		NO_ARG,	NULL,			'y' },
-	{ "group",		NO_ARG,	NULL,			'g' },
-	{ "hard-links",		NO_ARG,	NULL,			'H' },
-	{ "human-readable",	NO_ARG,	NULL,			'h' },
-	{ "ignore-errors",	NO_ARG,	&opt_ignore_errors,	1 },
-	{ "ignore-existing",	NO_ARG,	&opt_ignore_existing,	1 },
-	{ "ignore-times",	NO_ARG,	NULL,			'I' },
-	{ "include",		REQARG,	NULL,			OPT_INCLUDE },
-	{ "include-from",	REQARG,	NULL,			OPT_INCLUDE_FROM },
-	{ "inplace",		NO_ARG,	&opt_inplace,		1 },
-	{ "ipv4",		NO_ARG,	NULL,			'4' },
-	{ "ipv6",		NO_ARG,	NULL,			'6' },
-	{ "itemize-changes",	NO_ARG,	NULL,			'i' },
-	{ "keep-dirlinks",	NO_ARG,	NULL,			'K' },
-	{ "link-dest",		REQARG,	NULL,			OPT_LINK_DEST },
-	{ "links",		NO_ARG,	NULL,			'l' },
-	{ "list-only",		NO_ARG,	&opt_list_only,		1 },
-	{ "log-file",		REQARG,	NULL,			OPT_LOG_FILE },
-	{ "log-file-format",	REQARG,	NULL,			OPT_LOG_FILE_FORMAT },
-	{ "max-delete",		REQARG,	NULL,			OPT_MAX_DELETE },
-	{ "max-size",		REQARG,	NULL,			OPT_MAX_SIZE },
-	{ "min-size",		REQARG,	NULL,			OPT_MIN_SIZE },
-	{ "modify-window",	REQARG,	NULL,			OPT_MODIFY_WINDOW },
-	{ "no-implied-dirs",	NO_ARG,	&opt_no_implied_dirs,	1 },
-	{ "numeric-ids",	NO_ARG,	&opt_numeric_ids,	1 },
-	{ "omit-dir-times",	NO_ARG,	NULL,			'O' },
-	{ "one-file-system",	NO_ARG,	NULL,			'x' },
-	{ "only-write-batch",	REQARG,	NULL,			OPT_ONLY_WRITE_BATCH },
-	{ "out-format",		REQARG,	NULL,			OPT_OUT_FORMAT },
-	{ "owner",		NO_ARG,	NULL,			'o' },
-	{ "partial",		NO_ARG,	&opt_partial,		1 },
-	{ "partial-dir",	REQARG,	NULL,			OPT_PARTIAL_DIR },
-	{ "password-file",	REQARG,	NULL,			OPT_PASSWORD_FILE },
-	{ "perms",		NO_ARG,	NULL,			'p' },
-	{ "port",		REQARG,	NULL,			OPT_PORT },
-	{ "progress",		NO_ARG,	&opt_progress,		1 },
-	{ "prune-empty-dirs",	NO_ARG,	NULL,			'm' },
-	{ "psync-path",		REQARG,	NULL,			OPT_PSYNC_PATH },
-	{ "quiet",		NO_ARG,	NULL,			'q' },
-	{ "read-batch",		REQARG,	NULL,			OPT_READ_BATCH },
-	{ "recursive",		NO_ARG,	NULL,			'r' },
-	{ "relative",		NO_ARG,	NULL,			'R' },
-	{ "remove-source-files",NO_ARG,	&opt_remove_source_files,1 },
-	{ "rsh",		REQARG,	NULL,			'e' },
-	{ "safe-links",		NO_ARG,	&opt_safe_links,	1 },
-	{ "size-only",		NO_ARG,	&opt_size_only,		1 },
-	{ "sockopts",		REQARG,	NULL,			OPT_SOCKOPTS },
-	{ "sparse",		NO_ARG,	NULL,			'S' },
-	{ "specials",		NO_ARG,	&opt_specials,		1 },
-	{ "stats",		NO_ARG,	&opt_stats,		1 },
-	{ "suffix",		REQARG,	NULL,			OPT_SUFFIX },
-	{ "super",		NO_ARG,	&opt_super,		1 },
-	{ "temp-dir",		REQARG,	NULL,			'T' },
-	{ "timeout",		REQARG,	NULL,			OPT_TIMEOUT },
-	{ "times",		NO_ARG,	NULL,			't' },
-	{ "update",		NO_ARG,	NULL,			'u' },
-	{ "verbose",		NO_ARG,	NULL,			'v' },
-	{ "version",		NO_ARG,	NULL,			'V' },
-	{ "whole-file",		NO_ARG,	NULL,			'W' },
-	{ "write-batch",	REQARG,	NULL,			OPT_WRITE_BATCH },
-
-	/* psync specific options */
-	{ "dstdir",		REQARG,	NULL,			OPT_DSTDIR },
-	{ "streams",		REQARG,	&opt_streams,		'N' },
-
-	{ NULL,			0,	NULL,			0 }
-};
 
 void
 filehandle_dropref(struct filehandle *fh, size_t len)
@@ -369,49 +119,50 @@ psynclog_tdebug("CLOSE %d\n", fh->fd);
 }
 
 void
-proc_work(struct work *wk)
-{
-	switch (wk->wk_type) {
-	case OPC_GETFILE_REQ:
-		rpc_send_getfile(wk->wk_xid, wk->wk_fn, wk->wk_basefn);
-		break;
-	case OPC_PUTDATA:
-//psynclog_tdebug("PUTDATA");
-		if (opt_sparse == 0 || !pfl_memchk(wk->wk_fh->base +
-		    wk->wk_off, 0, wk->wk_len))
-			rpc_send_putdata(wk->wk_stb.st_ino, wk->wk_off,
-			    wk->wk_fh->base + wk->wk_off, wk->wk_len);
-		filehandle_dropref(wk->wk_fh, wk->wk_stb.st_size);
-		break;
-	case OPC_PUTNAME:
-		rpc_send_putname(wk->wk_fn, &wk->wk_stb, wk->wk_buf,
-		    wk->wk_rflags);
-		PSCFREE(wk->wk_buf);
-		break;
-	}
-}
-
-void
-wkthr_main(struct psc_thread *thr)
+wkrthr_main(struct psc_thread *thr)
 {
 	static struct pfl_mutex mut = PSC_MUTEX_INIT;
 	static int finished;
 
 	int i, was_me = 0;
-	struct stream *st;
+	struct wkrthr *wkrthr = thr->pscthr_private;
+	struct stream *st = wkrthr->st;
 	struct work *wk;
 
 	while (pscthr_run(thr)) {
 		wk = lc_getwait(&workq);
 		if (wk == NULL)
 			break;
-		wk->wk_cb(wk);
+
+		switch (wk->wk_type) {
+		case OPC_GETFILE_REQ:
+			rpc_send_getfile(st, wk->wk_xid, wk->wk_fn,
+			    wk->wk_basefn);
+			break;
+		case OPC_PUTDATA:
+//psynclog_tdebug("PUTDATA");
+			if (opts.sparse == 0 ||
+			    !pfl_memchk(wk->wk_fh->base + wk->wk_off, 0,
+			    wk->wk_len))
+				rpc_send_putdata(st, wk->wk_stb.st_ino,
+				    wk->wk_off, wk->wk_fh->base +
+				    wk->wk_off, wk->wk_len);
+			filehandle_dropref(wk->wk_fh,
+			    wk->wk_stb.st_size);
+			break;
+		case OPC_PUTNAME:
+			rpc_send_putname(st, wk->wk_fn, &wk->wk_stb,
+			    wk->wk_buf, wk->wk_rflags);
+			PSCFREE(wk->wk_buf);
+			break;
+		}
+
 		psc_pool_return(work_pool, wk);
 
 		if (exit_from_signal)
 			break;
 	}
-psynclog_tdebug("wkthr done");
+psynclog_tdebug("wkrthr done");
 	pthread_barrier_wait(&work_barrier);
 
 	psc_mutex_lock(&mut);
@@ -431,7 +182,7 @@ psynclog_tdebug("CLOSE1 %d", st->wfd);
 			}
 
 		/* wait for all other streams to finish */
-		while (psc_atomic32_read(&psync_nrecvthr) > 1)
+		while (psc_atomic32_read(&psync_nrcvthr) > 1)
 			usleep(1000);
 psynclog_tdebug("done waiting");
 
@@ -455,7 +206,6 @@ work_getitem(int type)
 	memset(wk, 0, sizeof(*wk));
 	INIT_LISTENTRY(&wk->wk_lentry);
 	wk->wk_type = type;
-	wk->wk_cb = proc_work;
 	return (wk);
 }
 
@@ -471,7 +221,7 @@ enqueue_put(const char *srcfn, const char *dstfn,
 	off_t off = 0;
 	size_t blksz;
 
-	blksz = opt_block_size ? (blksize_t)opt_block_size :
+	blksz = opts.block_size ? (blksize_t)opts.block_size :
 	    stb->st_blksize;
 blksz = 64 * 1024;
 
@@ -505,7 +255,7 @@ psynclog_tdebug("PUTNAME local=%s DSTFN %s", wk->wk_fn, wk->wk_basefn);
 	/* push data chunks */
 	for (; off < stb->st_size; off += blksz) {
 #if 0
-		if (opt_partial) {
+		if (opts.partial) {
 			if (checksum) {
 				wk = work_getitem(OPC_GETCKSUM_REQ);
 				wk->wk_off = off;
@@ -560,7 +310,7 @@ push_putfile_walkcb(const char *fn, const struct stat *stb,
 	struct filterpat *fp;
 
 	ok = 1;
-	DYNARRAY_FOREACH(fp, j, &opt_filter) {
+	DYNARRAY_FOREACH(fp, j, &opts.filter) {
 		if ()
 			ok = ;
 	}
@@ -643,102 +393,11 @@ walkfiles(int mode, const char *srcfn, int travflags, int rflags,
 psynclog_tdebug("MAP %lx -> %s", wk->wk_xid, finalfn);
 	strlcpy(wk->wk_fn, srcfn, sizeof(wk->wk_fn));
 	strlcpy(wk->wk_basefn, finalfn, sizeof(wk->wk_basefn));
-//	if (!opt_partial)
+//	if (!opts.partial)
 //		truncate(finalfn, 0);
 	lc_add(&workq, wk);
 
 	return (0);
-}
-
-void
-pushfile(struct psc_dynarray *da, char *fn,
-    void (*f)(struct psc_dynarray *, char *, int), int arg)
-{
-	char *p, buf[BUFSIZ];
-	FILE *fp;
-
-	fp = fopen(fn, "r");
-	if (fp == NULL)
-		psync_fatal("%s", fn);
-	while (fgets(buf, sizeof(buf), fp)) {
-		p = pfl_strdup(buf);
-		f(da, p, arg);
-	}
-	if (ferror(fp))
-		psync_fatal("%s", fn);
-	fclose(fp);
-}
-
-struct filterpattern {
-	int		 fp_type;
-	int		 fp_flags;
-	char		*fp_pat;
-};
-
-#define FPT_INCL	(1 << 0)
-#define FPT_EXCL	(1 << 1)
-#define FPT_MERGE	(1 << 2)
-#define FPT_DIRMERGE	(1 << 3)
-#define FPT_HIDE	(1 << 4)
-#define FPT_SHOW	(1 << 5)
-#define FPT_PROTECT	(1 << 6)
-#define FPT_RISK	(1 << 7)
-#define FPT_CLEAR	(1 << 8)
-
-void
-push_filter(struct psc_dynarray *da, char *s, int type)
-{
-	struct {
-		const char	*name;
-		const char	*abbr;
-		int		 type;
-	} *ty, types[] = {
-		{ "clear",	"!", FPT_CLEAR },
-		{ "dir-merge",	":", FPT_DIRMERGE },
-		{ "exclude",	"-", FPT_EXCL },
-		{ "hide",	"H", FPT_HIDE },
-		{ "include",	"+", FPT_INCL },
-		{ "merge",	".", FPT_MERGE },
-		{ "protect",	"P", FPT_PROTECT },
-		{ "risk",	"R", FPT_RISK },
-		{ "show",	"S", FPT_SHOW }
-	};
-	struct filterpattern *fp;
-	char *sty, *sep;
-	int n;
-
-	fp = PSCALLOC(sizeof(*fp));
-	if (type) {
-		fp->fp_type = type;
-		fp->fp_pat = s;
-	} else {
-		for (sty = s; *s && !isspace(*s); s++)
-			;
-		while (isspace(*s))
-			s++;
-		if (*s == '\0')
-			psync_fatal("invalid format");
-		sep = strchr(sty, ',');
-		if (sep)
-			*sep = '\0';
-
-		for (n = 0, ty = types; n < nitems(types); ty++, n++)
-			if (strcmp(ty->name, sty) == 0 ||
-			    strcmp(ty->abbr, sty) == 0)
-				break;
-		if (n == nitems(types))
-			psync_fatal("invalid format");
-		fp->fp_type = ty->type;
-		fp->fp_pat = s;
-	}
-	push(da, fp);
-}
-
-void
-push_files_from(struct psc_dynarray *da, char *fn,
-    __unusedx int arg)
-{
-	push(da, fn);
 }
 
 int
@@ -787,17 +446,18 @@ filesfrom(int mode, const char *fromfn, int travflags,
 int
 puppet_mode(void)
 {
-	struct psc_thread *thr, *wkthr;
-	struct recvthr *rt;
+	struct psc_thread *rthr, *wthr;
+	struct wkrthr *wkrthr;
+	struct rcvthr *rcvthr;
 	struct stream *st;
 
-	if (chdir(opt_dstdir) == -1) {
+	if (chdir(opts.dstdir) == -1) {
 		if (errno != EEXIST)
-			psync_fatal("%s", opt_dstdir);
-		if (mkdir(opt_dstdir, 0755) == -1)
-			psync_fatal("%s", opt_dstdir);
-		if (chdir(opt_dstdir) == -1)
-			psync_fatal("%s", opt_dstdir);
+			psync_fatal("%s", opts.dstdir);
+		if (mkdir(opts.dstdir, 0755) == -1)
+			psync_fatal("%s", opts.dstdir);
+		if (chdir(opts.dstdir) == -1)
+			psync_fatal("%s", opts.dstdir);
 	}
 
 	signal(SIGINT, handle_signal);
@@ -806,24 +466,28 @@ puppet_mode(void)
 	st = stream_create(STDIN_FILENO, STDOUT_FILENO);
 	psc_dynarray_add(&streams, st);
 
-	wkthr = pscthr_init(THRT_WK, 0, wkthr_main, NULL, 0, "wkthr");
+	wthr = pscthr_init(THRT_WKR, 0, wkrthr_main, NULL,
+	    sizeof(*wkrthr), "wkrthr");
+	wkrthr = wthr->pscthr_private;
+	wkrthr->st = st;
+	pscthr_setready(wthr);
 
 	/* XXX hack */
-	thr = pscthr_get();
-	rt = thr->pscthr_private = PSCALLOC(sizeof(*rt));
-	rt->st = st;
-	recvthr_main(thr);
+	rthr = pscthr_get();
+	rcvthr = rthr->pscthr_private = PSCALLOC(sizeof(*rcvthr));
+	rcvthr->st = st;
+	rcvthr_main(rthr);
 warnx("KILL %d", lc_nitems(&workq));
 	lc_kill(&workq);
 
 	//while (!psync_send_finished)
 		//sleep(1);
 
-//psynclog_tdebug("waiting on wkthr");
-	pthread_join(wkthr->pscthr_pthread, NULL);
+//psynclog_tdebug("waiting on wkrthr");
+	pthread_join(wthr->pscthr_pthread, NULL);
 
-	rpc_send_done(rt->st, 0);
-	close(rt->st->wfd);
+	rpc_send_done(st, 0);
+	close(st->wfd);
 
 	fcache_destroy();
 //psynclog_tdebug("exit");
@@ -863,7 +527,7 @@ dispthr_main(struct psc_thread *thr)
 		ts.tv_sec++;
 		psc_waitq_waitabs(&wq, NULL, &ts);
 
-		if (!opt_progress)
+		if (!opts.progress)
 			continue;
 
 		timespecsub(&ts, &start, &d);
@@ -879,12 +543,12 @@ dispthr_main(struct psc_thread *thr)
 		psc_fmt_human(ratebuf, rate);
 		printf(" %d thr  %6d fd  "
 		    "elapsed %02d:%02d:%02d(s)  %7s/s%s\r",
-		    opt_streams, inuse,
+		    opts.streams, inuse,
 		    sec / 60 / 60, sec / 60, sec % 60,
 		    ratebuf, ce_seq);
 		fflush(stdout);
 	}
-	if (!opt_progress)
+	if (!opts.progress)
 		return;
 
 	PFL_GETTIMESPEC(&ts);
@@ -937,6 +601,7 @@ getnprocessors(void)
 }
 
 /* XXX not dynamic adjusting but better than nothing */
+/* when copying to local machine, make sure to cut estimate by half */
 int
 getnstreams(int want)
 {
@@ -962,7 +627,7 @@ int
 main(int argc, char *argv[])
 {
 	char *p, *fn, *host, *dstfn, *dstdir;
-	int mode, travflags, rflags, i, rv, rc = 0, c;
+	int mode, travflags, rflags, i, rv, rc = 0;
 	struct psc_dynarray threads = DYNARRAY_INIT;
 	struct psc_thread *thr;
 
@@ -974,150 +639,7 @@ main(int argc, char *argv[])
 	pfl_init();
 	progname = argv[0];
 
-	opt_streams = getnstreams(MAX_STREAMS);
-
-	while ((c = getopt_long(argc, argv,
-	    "0468aB:bCcdEEe:f:gHhIiKkLlmN:nOoPpqRrST:tuVvWxyz", opts,
-	    NULL)) != -1) {
-		switch (c) {
-		case '0':		opt_from0 = 1;			break;
-		case '4':		opt_ipv4 = 1;			break;
-		case '6':		opt_ipv6 = 1;			break;
-		case '8':		opt_8_bit_output = 1;		break;
-		case 'a':		opt_devices = 1;
-					opt_group = 1;
-					opt_links = 1;
-					opt_owner = 1;
-					opt_perms = 1;
-					opt_recursive = 1;
-					opt_specials = 1;
-					opt_times = 1;			break;
-		case 'B':
-			if (!parsesize(&opt_block_size, optarg, 1))
-				err(1, "-B %s", optarg);
-			break;
-		case 'b':		opt_backup = 1;			break;
-		case 'C':		opt_cvs_exclude = 1;		break;
-		case 'c':		opt_checksum = 1;		break;
-		case 'd':		opt_dirs = 1;			break;
-		case 'E':		opt_extended_attributes = 1;	break;
-		case 'e':		opt_rsh = optarg;		break;
-		case 'f':
-			push_filter(&opt_filter, optarg, FPT_INCL);	break;
-		case 'g':		opt_group = 1;			break;
-		case 'H':		opt_hard_links = 1;		break;
-		case 'h':		opt_human_readable = 1;		break;
-		case 'I':		opt_ignore_times = 1;		break;
-		case 'i':		opt_itemize_changes = 1;	break;
-		case 'K':		opt_keep_dirlinks = 1;		break;
-		case 'k':		opt_copy_dirlinks = 1;		break;
-		case 'L':		opt_copy_links = 1;		break;
-		case 'l':		opt_links = 1;			break;
-		case 'm':		opt_prune_empty_dirs = 1;	break;
-		case 'N':
-			if (!parsenum(&opt_streams, optarg, 0, MAX_STREAMS))
-				err(1, "streams: %s", optarg);
-			break;
-		case 'n':		opt_dry_run = 1;		break;
-		case 'O':		opt_omit_dir_times = 1;		break;
-		case 'o':		opt_owner = 1;			break;
-		case 'P':		opt_progress = 1;
-					opt_partial = 1;		break;
-		case 'p':		opt_perms = 1;			break;
-		case 'q':		opt_quiet = 1;			break;
-		case 'R':		opt_relative = 1;		break;
-		case 'r':		opt_recursive = 1;		break;
-		case 'S':		opt_sparse = 1;			break;
-		case 'T':		opt_temp_dir = optarg;		break;
-		case 't':		opt_times = 1;			break;
-		case 'u':		opt_update = 1;			break;
-		case 'V':
-			fprintf(stderr, "psync version %s\n", PSYNC_VERSION);
-			exit(0);
-			break;
-		case 'v':		opt_verbose = 1;		break;
-		case 'W':		opt_whole_file = 1;		break;
-		case 'x':		opt_one_file_system = 1;	break;
-		case 'y':		opt_fuzzy = 1;			break;
-		case 'z':		opt_compress = 1;		break;
-		case OPT_ADDRESS:	opt_address = optarg;		break;
-		case OPT_BWLIMIT:
-			if (!parsesize(&opt_bwlimit, optarg, 1024))
-				err(1, "--bwlimit=%s", optarg);
-			break;
-		case OPT_CHMOD:		opt_chmod = optarg;		break;
-		case OPT_COMPARE_DEST:	opt_compare_dest = optarg;	break;
-		case OPT_COMPRESS_LEVEL:
-			if (!parsenum(&opt_compress_level, optarg, 0, 10))
-				err(1, "--compress-level=%s", optarg);
-			break;
-		case OPT_COPY_DEST:	opt_copy_dest = optarg;		break;
-		case OPT_EXCLUDE:
-			push_filter(&opt_filter, optarg, FPT_EXCL);	break;
-		case OPT_EXCLUDE_FROM:
-			pushfile(&opt_filter, optarg, push_filter,
-			    FPT_EXCL);					break;
-		case OPT_FILES_FROM:
-			pushfile(&opt_files, optarg, push_files_from,
-			    FPT_INCL);					break;
-		case OPT_INCLUDE:
-			push_filter(&opt_filter, optarg, FPT_INCL);	break;
-		case OPT_INCLUDE_FROM:
-			pushfile(&opt_filter, optarg, push_filter,
-			    FPT_INCL);					break;
-		case OPT_LINK_DEST:	opt_link_dest = optarg;		break;
-		case OPT_LOG_FILE:	opt_log_file = optarg;		break;
-		case OPT_LOG_FILE_FORMAT:
-					opt_log_file_format = optarg;	break;
-		case OPT_MAX_DELETE:
-			if (!parsenum(&opt_max_delete, optarg, 0, INT_MAX))
-				err(1, "--max-delete=%s", optarg);
-			break;
-		case OPT_MAX_SIZE:
-			if (!parsesize(&opt_max_size, optarg, 1))
-				err(1, "--max-size=%s", optarg);
-			break;
-		case OPT_MIN_SIZE:
-			if (!parsesize(&opt_min_size, optarg, 1))
-				err(1, "--min-size=%s", optarg);
-			break;
-		case OPT_MODIFY_WINDOW:
-			if (!parsenum(&opt_modify_window, optarg, 0, INT_MAX))
-				err(1, "--modify-window=%s", optarg);
-			break;
-		case OPT_ONLY_WRITE_BATCH:opt_write_batch = optarg;	break;
-		case OPT_OUT_FORMAT:	opt_out_format = optarg;	break;
-		case OPT_PORT:
-			if (!parsenum(&opt_port, optarg, 0, 65535))
-				err(1, "--port=%s", optarg);
-			break;
-		case OPT_PARTIAL_DIR:	opt_partial_dir = optarg;	break;
-		case OPT_PASSWORD_FILE:	opt_password_file = optarg;	break;
-		case OPT_PSYNC_PATH:	opt_psync_path = optarg;	break;
-		case OPT_READ_BATCH:	opt_read_batch = optarg;	break;
-		case OPT_SOCKOPTS:	opt_sockopts = optarg;		break;
-		case OPT_SUFFIX:	opt_suffix = optarg;		break;
-		case OPT_TIMEOUT:
-			if (!parsenum(&opt_timeout, optarg, 0, INT_MAX))
-				err(1, "--timeout=%s", optarg);
-			break;
-		case OPT_WRITE_BATCH:	opt_write_batch = optarg;	break;
-
-		/* psync specific options */
-		case OPT_DSTDIR:	opt_dstdir = optarg;		break;
-		case OPT_PUPPET:
-			if (!parsenum(&opt_puppet, optarg, 0, 1000000))
-				err(1, "--PUPPET=%s", optarg);
-			opt_streams = 1;
-			break;
-
-		case 0:
-			break;
-		default:
-			warn("invalid option: -%c", c);
-			usage();
-		}
-	}
+	parseopts(argc, argv);
 	argc -= optind;
 	argv += optind;
 
@@ -1142,15 +664,15 @@ main(int argc, char *argv[])
 
 	lc_reginit(&workq, struct work, wk_lentry, "workq");
 
-	pthread_barrier_init(&work_barrier, NULL, opt_streams);
+	pthread_barrier_init(&work_barrier, NULL, opts.streams);
 
-	if (opt_puppet)
+	if (opts.puppet)
 		exit(puppet_mode());
 
 	psync_is_master = 1;
 
 	if (argc < 2 ||
-	    (argc == 1 && psc_dynarray_len(&opt_files) == 0))
+	    (argc == 1 && psc_dynarray_len(&opts.files) == 0))
 		usage();
 
 	/*
@@ -1219,16 +741,13 @@ main(int argc, char *argv[])
 	psc_tiosthr_spawn(THRT_TIOS, "tios");
 
 	do
-		opt_puppet = psc_random32u(1000000);
-	while (!opt_puppet);
+		opts.puppet = psc_random32u(1000000);
+	while (!opts.puppet);
 
-	for (i = 0; i < opt_streams; i++) {
-		struct recvthr *rt;
+	for (i = 0; i < opts.streams; i++) {
+		struct wkrthr *wkrthr;
+		struct rcvthr *rcvthr;
 		struct stream *st;
-
-		thr = pscthr_init(THRT_WK, 0, wkthr_main, NULL, 0,
-		    "wkthr%d", i);
-		push(&threads, thr);
 
 		/* spawning multiple ssh too quickly fails */
 		if (i)
@@ -1240,17 +759,23 @@ main(int argc, char *argv[])
 		 */
 		st = stream_cmdopen("%s %s %s --PUPPET=%d --dstdir=%s "
 		    "%s %s %s",
-		    opt_rsh, host, opt_psync_path, opt_puppet, dstdir,
-		    opt_recursive	? "-r" : "",
-		    opt_perms		? "-p" : "",
-		    opt_sparse		? "-S" : "");
-
+		    opts.rsh, host, opts.psync_path, opts.puppet, dstdir,
+		    opts.recursive	? "-r" : "",
+		    opts.perms		? "-p" : "",
+		    opts.sparse		? "-S" : "");
 		psc_dynarray_add(&streams, st);
 
-		thr = pscthr_init(THRT_RECV, 0, recvthr_main, NULL,
-		    sizeof(*rt), "recvthr%d", i);
-		rt = thr->pscthr_private;
-		rt->st = st;
+		thr = pscthr_init(THRT_RCV, 0, rcvthr_main, NULL,
+		    sizeof(*rcvthr), "rcvthr%d", i);
+		rcvthr = thr->pscthr_private;
+		rcvthr->st = st;
+		pscthr_setready(thr);
+		push(&threads, thr);
+
+		thr = pscthr_init(THRT_WKR, 0, wkrthr_main, NULL,
+		    sizeof(*wkrthr), "wkrthr%d", i);
+		wkrthr = thr->pscthr_private;
+		wkrthr->st = st;
 		pscthr_setready(thr);
 		push(&threads, thr);
 
@@ -1258,9 +783,9 @@ main(int argc, char *argv[])
 	}
 
 	travflags = PFL_FILEWALKF_RELPATH;
-	if (opt_recursive)
+	if (opts.recursive)
 		travflags |= PFL_FILEWALKF_RECURSIVE;
-	if (opt_verbose)
+	if (opts.verbose)
 		travflags |= PFL_FILEWALKF_VERBOSE;
 
 	signal(SIGINT, handle_signal);
@@ -1278,7 +803,7 @@ main(int argc, char *argv[])
 		if (rv)
 			rc = rv;
 	}
-	DYNARRAY_FOREACH(fn, i, &opt_files) {
+	DYNARRAY_FOREACH(fn, i, &opts.files) {
 		rv = filesfrom(mode, fn, travflags, dstfn);
 		if (rv)
 			rc = rv;

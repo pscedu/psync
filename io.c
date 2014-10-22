@@ -21,6 +21,7 @@
 #include "pfl/walk.h"
 
 #include "psync.h"
+#include "options.h"
 
 struct psc_hashtbl	 fcache;
 
@@ -32,7 +33,7 @@ objns_create(void)
 	spinlock(&lock);
 	if (objns_path[0] == '\0') {
 		snprintf(objns_path, sizeof(objns_path), ".psync.%d",
-		    opt_puppet);
+		    opts.puppet);
 		if (mkdir(objns_path, 0700) == -1 && errno != EEXIST)
 			psync_fatal("mkdir %s", objns_path);
 	}

@@ -15,10 +15,11 @@ struct stat;
 
 struct psc_thread;
 
+#define MAX_STREAMS	64
+
 struct stream {
 	int			 rfd;
 	int			 wfd;
-	struct pfl_mutex	 mut;
 };
 
 struct file {
@@ -27,7 +28,11 @@ struct file {
 	int			 fd;
 };
 
-struct recvthr {
+struct wkrthr {
+	struct stream		*st;
+};
+
+struct rcvthr {
 	struct stream		*st;
 	char			 fnbuf[PATH_MAX];
 	struct file		*last_f;
@@ -113,7 +118,7 @@ char	**str_split(char *);
 int	  parsenum(int *, const char *, int, int);
 int	  parsesize(uint64_t *, const char *, uint64_t);
 
-void	  recvthr_main(struct psc_thread *);
+void	  rcvthr_main(struct psc_thread *);
 
 void	  objns_makepath(char *, uint64_t);
 
@@ -128,6 +133,9 @@ void	  fcache_close(struct file *);
 void	  fcache_init(void);
 void	  fcache_destroy(void);
 
+int	  getnstreams(int);
+__dead void
+	  usage(void);
 
 int	  push_putfile_walkcb(const char *, const struct stat *, int,
 	    int, void *);
@@ -144,8 +152,6 @@ void	  psync_utimes(const char *, const struct pfl_timespec *, int);
 
 struct stream	*stream_cmdopen(const char *, ...);
 struct stream	*stream_create(int, int);
-struct stream	*stream_get(void);
-void		 stream_release(struct stream *);
 void		 stream_sendx(struct stream *, uint64_t, int, void *,
 		    size_t);
 void		 stream_sendxv(struct stream *, uint64_t, int,
@@ -159,22 +165,12 @@ extern int			 objns_depth;
 extern volatile sig_atomic_t	 exit_from_signal;
 
 extern psc_atomic32_t		 psync_xid;
-extern psc_atomic32_t		 psync_nrecvthr;
+extern psc_atomic32_t		 psync_nrcvthr;
 extern int			 psync_is_master;
 extern int			 psync_rm_objns;
 extern int			 psync_send_finished;
 extern int			 psync_recv_finished;
 extern mode_t			 psync_umask;
-
-extern int			 opt_executability;
-extern int			 opt_group;
-extern int			 opt_owner;
-extern int			 opt_perms;
-extern int			 opt_recursive;
-extern int			 opt_times;
-
-extern int			 opt_puppet;
-extern int			 opt_streams;
 
 extern struct psc_dynarray	 streams;
 

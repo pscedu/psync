@@ -89,9 +89,12 @@ struct rpc_done {
 };
 
 void rpc_send_done(struct stream *, int);
-void rpc_send_getfile(uint64_t, const char *, const char *);
-void rpc_send_putdata(uint64_t, off_t, const void *, size_t);
-void rpc_send_putname(const char *, const struct stat *, const char *, int);
+void rpc_send_getfile(struct stream *, uint64_t, const char *,
+	const char *);
+void rpc_send_putdata(struct stream *, uint64_t, off_t, const void *,
+	size_t);
+void rpc_send_putname(struct stream *, const char *,
+	const struct stat *, const char *, int);
 
 void handle_signal(int);
 

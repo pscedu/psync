@@ -25,6 +25,7 @@
 #include "pfl/thread.h"
 #include "pfl/walk.h"
 
+#include "options.h"
 #include "psync.h"
 #include "rpc.h"
 
@@ -53,11 +54,11 @@ buf_get(size_t len)
 #define buf_release(b)	psc_pool_return(buf_pool, (b))
 
 void
-rpc_send_getfile(uint64_t xid, const char *fn, const char *base)
+rpc_send_getfile(struct stream *st, uint64_t xid, const char *fn,
+    const char *base)
 {
 	struct rpc_getfile_req gfq;
 	struct iovec iov[3];
-	struct stream *st;
 
 	memset(&gfq, 0, sizeof(gfq));
 
@@ -71,17 +72,15 @@ psynclog_tdebug("SEND GETFILE %lx", xid);
 	iov[2].iov_base = (void *)base;
 	iov[2].iov_len = strlen(fn) + 1;
 
-	st = stream_get();
 	stream_sendxv(st, xid, OPC_GETFILE_REQ, iov, nitems(iov));
-	stream_release(st);
 }
 
 void
-rpc_send_putdata(uint64_t fid, off_t off, const void *buf, size_t len)
+rpc_send_putdata(struct stream *st, uint64_t fid, off_t off,
+    const void *buf, size_t len)
 {
 	struct rpc_putdata pd;
 	struct iovec iov[2];
-	struct stream *st;
 
 	memset(&pd, 0, sizeof(pd));
 	pd.fid = fid;
@@ -94,18 +93,15 @@ rpc_send_putdata(uint64_t fid, off_t off, const void *buf, size_t len)
 	iov[1].iov_base = (void *)buf;
 	iov[1].iov_len = len;
 
-	st = stream_get();
 	stream_sendv(st, OPC_PUTDATA, iov, nitems(iov));
-	stream_release(st);
 }
 
 void
-rpc_send_putname(const char *fn, const struct stat *stb,
-    const char *buf, int rflags)
+rpc_send_putname(struct stream *st, const char *fn,
+    const struct stat *stb, const char *buf, int rflags)
 {
 	struct rpc_putname pn;
 	struct iovec iov[3];
-	struct stream *st;
 	int nio = 0;
 
 	memset(&pn, 0, sizeof(pn));
@@ -136,9 +132,7 @@ rpc_send_putname(const char *fn, const struct stat *stb,
 		nio++;
 	}
 
-	st = stream_get();
 	stream_sendv(st, OPC_PUTNAME, iov, nio);
-	stream_release(st);
 }
 
 void
@@ -159,11 +153,11 @@ psynclog_tdebug("send_done");
 #define LASTFIELDLEN(h, type) ((h)->msglen - sizeof(type))
 
 void
-rpc_handle_getfile_req(__unusedx struct hdr *h, void *buf)
+rpc_handle_getfile_req(struct stream *st, __unusedx struct hdr *h,
+    void *buf)
 {
 	struct rpc_getfile_req *gfq = buf;
 	struct rpc_getfile_rep gfp;
-	struct stream *st;
 	struct walkarg wa;
 	struct stat stb;
 	int travflags;
@@ -183,7 +177,7 @@ rpc_handle_getfile_req(__unusedx struct hdr *h, void *buf)
 			wa.skip = 0;
 		wa.prefix = base[0] ? base : ".";
 		wa.rflags = 0;
-		if (S_ISDIR(stb.st_mode) && opt_recursive)
+		if (S_ISDIR(stb.st_mode) && opts.recursive)
 			travflags |= PFL_FILEWALKF_RECURSIVE;
 
 		gfp.rc = pfl_filewalk(gfq->fn, travflags, NULL,
@@ -193,73 +187,54 @@ rpc_handle_getfile_req(__unusedx struct hdr *h, void *buf)
 psynclog_tdebug("getfile %d", errno);
 	}
 
-	st = stream_get();
 	stream_send(st, OPC_GETFILE_REP, &gfp, sizeof(gfp));
-	stream_release(st);
 }
 
 void
-rpc_handle_getfile_rep(struct hdr *h, void *buf)
+rpc_handle_getfile_rep(struct stream *st, struct hdr *h, void *buf)
 {
 	struct rpc_getfile_rep *gfp = buf;
-	size_t end;
 
+	(void)st;
 	(void)h;
 	(void)gfp;
-	(void)end;
 }
 
 void
-rpc_handle_putdata(struct hdr *h, void *buf)
+rpc_handle_putdata(__unusedx struct stream *st, struct hdr *h,
+    void *buf)
 {
 	struct rpc_putdata *pd = buf;
 	struct psc_thread *thr;
-	struct recvthr *rt;
+	struct rcvthr *rcvthr;
 	struct file *f;
 	ssize_t rc;
 	size_t len;
 
-#if 0
-	if (h->msglen == 0 ||
-	    h->msglen > MAX_BUFSZ) {
-		psynclog_warn("invalid msglen");
-		return;
-	}
-#endif
-
 	len = h->msglen - sizeof(*pd);
 
 //psynclog_tdebug("HANDLE PUT %lx", pd->fid);
-	f = fcache_search(pd->fid); // XXX check rt->last_f first
+	f = fcache_search(pd->fid); // XXX check rcvthr->last_f first
 	rc = pwrite(f->fd, pd->data, len, pd->off);
 	if (rc != (ssize_t)len)
 		psynclog_error("write off=%"PRId64" len=%"PRId64" "
 		    "rc=%zd", pd->off, len, rc);
 
 	thr = pscthr_get();
-	rt = thr->pscthr_private;
-	if (rt->last_f && pd->fid != rt->last_f->fid) {
-
-		fcache_close(rt->last_f);
-	}
-	rt->last_f = f;
+	rcvthr = thr->pscthr_private;
+	if (rcvthr->last_f && pd->fid != rcvthr->last_f->fid)
+		fcache_close(rcvthr->last_f);
+	rcvthr->last_f = f;
 }
 
 void
-rpc_handle_checkzero_req(struct hdr *h, void *buf)
+rpc_handle_checkzero_req(struct stream *st, struct hdr *h, void *buf)
 {
 	struct rpc_checkzero_req *czq = buf;
 	struct rpc_checkzero_rep czp;
-	struct stream *st;
 	struct buf *bp;
 	struct file *f;
 	ssize_t rc;
-
-#if 0
-	if (czq->len == 0 ||
-	    czq->len > MAX_BUFSZ)
-		PFL_GOTOERR(out, czp.rc = EINVAL);
-#endif
 
 	bp = buf_get(czq->len);
 
@@ -273,37 +248,29 @@ rpc_handle_checkzero_req(struct hdr *h, void *buf)
 
 	buf_release(bp);
 
-	st = stream_get();
 	stream_sendx(st, h->xid, OPC_CHECKZERO_REP, &czp, sizeof(czp));
-	stream_release(st);
 }
 
 void
-rpc_handle_checkzero_rep(struct hdr *h, void *buf)
+rpc_handle_checkzero_rep(struct stream *st, struct hdr *h, void *buf)
 {
 	struct rpc_checkzero_rep *czp = buf;
 
+	(void)st;
 	(void)h;
 	(void)czp;
 }
 
 void
-rpc_handle_getcksum_req(struct hdr *h, void *buf)
+rpc_handle_getcksum_req(struct stream *st, struct hdr *h, void *buf)
 {
 	gcry_md_hd_t hd;
 	gcry_error_t gerr;
 	struct rpc_getcksum_req *gcq = buf;
 	struct rpc_getcksum_rep gcp;
-	struct stream *st;
 	struct buf *bp;
 	struct file *f;
 	ssize_t rc;
-
-#if 0
-	if (czq->len == 0 ||
-	    czq->len > MAX_BUFSZ)
-		PFL_GOTOERR(out, czp.rc = EINVAL);
-#endif
 
 	bp = buf_get(gcq->len);
 
@@ -323,16 +290,15 @@ rpc_handle_getcksum_req(struct hdr *h, void *buf)
 
 	buf_release(bp);
 
-	st = stream_get();
 	stream_sendx(st, h->xid, OPC_GETCKSUM_REP, &gcp, sizeof(gcp));
-	stream_release(st);
 }
 
 void
-rpc_handle_getcksum_rep(struct hdr *h, void *buf)
+rpc_handle_getcksum_rep(struct stream *st, struct hdr *h, void *buf)
 {
 	struct rpc_getcksum_rep *gcp = buf;
 
+	(void)st;
 	(void)h;
 	(void)gcp;
 }
@@ -344,13 +310,13 @@ char *
 userfn_subst(const char *fn)
 {
 	struct psc_thread *thr;
-	struct recvthr *rt;
+	struct rcvthr *rcvthr;
 	const char *s = fn;
 	char *t;
 
 	thr = pscthr_get();
-	rt = thr->pscthr_private;
-	t = rt->fnbuf;
+	rcvthr = thr->pscthr_private;
+	t = rcvthr->fnbuf;
 	if (*s == '~') {
 		struct passwd pw, *res = NULL;
 		int bufsz, rc;
@@ -382,17 +348,18 @@ userfn_subst(const char *fn)
 			getpwnam_r(nam, &pw, pwbuf, bufsz, &res);
 			PSCFREE(nam);
 		}
-		if (res && (rc = snprintf(rt->fnbuf, sizeof(rt->fnbuf),
-		    "%s", res->pw_dir)) != -1)
+		if (res && (rc = snprintf(rcvthr->fnbuf,
+		    sizeof(rcvthr->fnbuf), "%s", res->pw_dir)) != -1)
 			t += rc;
 		else
 			s = fn;
 		PSCFREE(pwbuf);
 	}
-	for (; *s && t < rt->fnbuf + sizeof(rt->fnbuf) - 1; s++, t++)
+	for (; *s && t < rcvthr->fnbuf + sizeof(rcvthr->fnbuf) - 1;
+	    s++, t++)
 		*t = *s;
 	*t = '\0';
-	return (rt->fnbuf);
+	return (rcvthr->fnbuf);
 }
 
 #define TRYDIR()							\
@@ -401,7 +368,7 @@ userfn_subst(const char *fn)
 		goto begin;
 
 void
-rpc_handle_putname(struct hdr *h, void *buf)
+rpc_handle_putname(__unusedx struct stream *st, struct hdr *h, void *buf)
 {
 	int fd = -1, flags = 0;
 	char *sep, *ufn, objfn[PATH_MAX];
@@ -431,6 +398,14 @@ mkdirs_path = pfl_strdup(ufn);
 	}
 
 	if (0) {
+		/*
+		 * Handle PUT with a rename:
+		 *
+		 *	$ psync a remote:b
+		 *
+		 * If `b' is an existing dir, we use basename `a'.
+		 * Else, we use `b'.  If so, we end up here.
+		 */
  begin:
 		sep = strrchr(ufn, '/');
 		if (sep)
@@ -520,17 +495,17 @@ if (ntry++ < 5) {
 		return;
 	}
 
-	if (opt_owner || opt_group)
+	if (opts.owner || opts.group)
 		psync_chown(ufn, pn->pstb.uid, pn->pstb.gid, flags);
 
 	mode = S_ISDIR(pn->pstb.mode) ? 0777 : 0666;
-	if (opt_perms)
+	if (opts.perms)
 		mode = pn->pstb.mode;
-	else if (opt_executability)
+	else if (opts.executability)
 		mode |= pn->pstb.mode & _S_IXUGO;
 	psync_chmod(ufn, mode & ~psync_umask, flags);
 
-	if (opt_times)
+	if (opts.times)
 		psync_utimes(ufn, pn->pstb.tim, flags);
 
 	/* XXX BSD file flags */
@@ -544,10 +519,11 @@ if (ntry++ < 5) {
 }
 
 void
-rpc_handle_done(struct hdr *h, void *buf)
+rpc_handle_done(struct stream *st, struct hdr *h, void *buf)
 {
 	struct rpc_done *d = buf;
 
+	(void)st;
 	(void)h;
 	(void)buf;
 
@@ -557,7 +533,7 @@ rpc_handle_done(struct hdr *h, void *buf)
 psynclog_tdebug("psync_recv_finished=1 clean=%d", d->clean);
 }
 
-typedef void (*op_handler_t)(struct hdr *, void *);
+typedef void (*op_handler_t)(struct stream *, struct hdr *, void *);
 
 op_handler_t ops[] = {
 	rpc_handle_getfile_req,
@@ -578,19 +554,19 @@ handle_signal(__unusedx int sig)
 }
 
 void
-recvthr_main(struct psc_thread *thr)
+rcvthr_main(struct psc_thread *thr)
 {
 	void *buf = NULL;
 	uint32_t bufsz = 0;
-	struct recvthr *rt;
+	struct rcvthr *rcvthr;
 	struct hdr hdr;
 	ssize_t rc;
 
-	psc_atomic32_inc(&psync_nrecvthr);
+	psc_atomic32_inc(&psync_nrcvthr);
 
-	rt = thr->pscthr_private;
+	rcvthr = thr->pscthr_private;
 	while (pscthr_run(thr)) {
-		rc = atomicio_read(rt->st->rfd, &hdr, sizeof(hdr));
+		rc = atomicio_read(rcvthr->st->rfd, &hdr, sizeof(hdr));
 		if (rc == 0)
 			break;
 
@@ -606,18 +582,18 @@ recvthr_main(struct psc_thread *thr)
 		if (hdr.opc >= nitems(ops))
 			psync_fatalx("invalid opcode received from "
 			    "peer: %u", hdr.opc);
-		atomicio_read(rt->st->rfd, buf, hdr.msglen);
+		atomicio_read(rcvthr->st->rfd, buf, hdr.msglen);
 
 		if (exit_from_signal)
 			break;
-		ops[hdr.opc](&hdr, buf);
+		ops[hdr.opc](rcvthr->st, &hdr, buf);
 
 		if (exit_from_signal || psync_recv_finished)
 			break;
 	}
 
-psynclog_tdebug("recv done, CLOSE %d", rt->st->rfd);
-	close(rt->st->rfd);
+psynclog_tdebug("recv done, CLOSE %d", rcvthr->st->rfd);
+	close(rcvthr->st->rfd);
 
-	psc_atomic32_dec(&psync_nrecvthr);
+	psc_atomic32_dec(&psync_nrcvthr);
 }

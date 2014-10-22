@@ -76,14 +76,12 @@ struct rpc_getcksum_rep {
 struct rpc_putname {
 	struct rpc_sub_stat	pstb;
 	uint64_t		fid;
-	 int32_t		dirlen;
+	 int32_t		flags;
 	 int32_t		_pad;
-	char			dir[0];	/* might be file */
-	/*
-	 * Followed by file basename, used if not already specified
-	 * locally.
-	 */
+	char			fn[0];
 };
+
+#define RPC_PUTNAME_F_TRYDIR	(1 << 0)	/* try directory as base */
 
 struct rpc_done {
 	 int32_t		clean;
@@ -93,7 +91,7 @@ struct rpc_done {
 void rpc_send_done(struct stream *, int);
 void rpc_send_getfile(uint64_t, const char *, const char *);
 void rpc_send_putdata(uint64_t, off_t, const void *, size_t);
-void rpc_send_putname(const char *, const char *, const struct stat *);
+void rpc_send_putname(const char *, const struct stat *, const char *, int);
 
 void handle_signal(int);
 

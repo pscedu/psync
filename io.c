@@ -77,7 +77,7 @@ objns_makepath(char *fn, uint64_t fid)
 	snprintf(p, PATH_MAX - (p - fn), "%016"PRIx64, fid);
 }
 
-int
+struct file *
 _fcache_search(uint64_t fid, int fd)
 {
 	struct psc_hashbkt *b;
@@ -85,7 +85,7 @@ _fcache_search(uint64_t fid, int fd)
 
 	f = psc_hashtbl_search(&fcache, NULL, NULL, &fid);
 	if (f)
-		return (f->fd);
+		return (f);
 
 	b = psc_hashbkt_get(&fcache, &fid);
 	f = psc_hashbkt_search(&fcache, b, NULL, NULL, &fid);
@@ -112,21 +112,17 @@ _fcache_search(uint64_t fid, int fd)
 
 	if (fd != -1)
 		close(fd);
-	return (f->fd);
+	return (f);
 }
 
 void
-fcache_close(uint64_t fid)
+fcache_close(struct file *f)
 {
-	struct file *f;
-
-	f = psc_hashtbl_searchdel(&fcache, NULL, &fid);
-	if (f) {
-psynclog_debug("CLOSE %d\n", f->fd);
-		close(f->fd);
-		/* XXX refcnting/race ?? */
-		PSCFREE(f);
-	}
+	/* XXX refcnting/race ?? */
+	psc_hashent_remove(&fcache, f);
+psynclog_tdebug("CLOSE %d\n", f->fd);
+	close(f->fd);
+	PSCFREE(f);
 }
 
 void

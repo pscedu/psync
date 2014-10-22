@@ -15,10 +15,13 @@
 #include <unistd.h>
 
 #include "pfl/alloc.h"
+#include "pfl/fmt.h"
+#include "pfl/mkdirs.h"
 #include "pfl/net.h"
 #include "pfl/pool.h"
 #include "pfl/stat.h"
 #include "pfl/str.h"
+#include "pfl/sys.h"
 #include "pfl/thread.h"
 #include "pfl/walk.h"
 
@@ -97,14 +100,16 @@ rpc_send_putdata(uint64_t fid, off_t off, const void *buf, size_t len)
 }
 
 void
-rpc_send_putname(const char *dir, const char *fn,
-    const struct stat *stb)
+rpc_send_putname(const char *fn, const struct stat *stb,
+    const char *buf, int rflags)
 {
 	struct rpc_putname pn;
 	struct iovec iov[3];
 	struct stream *st;
+	int nio = 0;
 
 	memset(&pn, 0, sizeof(pn));
+	pn.flags = rflags;
 	pn.fid = stb->st_ino;
 	pn.pstb.dev = stb->st_dev;
 	pn.pstb.rdev = stb->st_rdev;
@@ -117,17 +122,22 @@ rpc_send_putname(const char *dir, const char *fn,
 	PFL_STB_MTIME_GET(stb, &pn.pstb.mtim.tv_sec,
 	    &pn.pstb.mtim.tv_nsec);
 
-	iov[0].iov_base = &pn;
-	iov[0].iov_len = sizeof(pn);
+	iov[nio].iov_base = &pn;
+	iov[nio].iov_len = sizeof(pn);
+	nio++;
 
-	iov[1].iov_base = (void *)dir;
-	iov[1].iov_len = pn.dirlen = strlen(dir) + 1;	// up to PATH_MAX
+	iov[nio].iov_base = (void *)fn;
+	iov[nio].iov_len = strlen(fn) + 1;
+	nio++;
 
-	iov[2].iov_base = (void *)fn;
-	iov[2].iov_len = strlen(fn) + 1;		// up to NAME_MAX
+	if (buf) {
+		iov[nio].iov_base = (void *)buf;
+		iov[nio].iov_len = strlen(buf) + 1;
+		nio++;
+	}
 
 	st = stream_get();
-	stream_sendv(st, OPC_PUTNAME, iov, nitems(iov));
+	stream_sendv(st, OPC_PUTNAME, iov, nio);
 	stream_release(st);
 }
 
@@ -149,33 +159,34 @@ psynclog_tdebug("send_done");
 #define LASTFIELDLEN(h, type) ((h)->msglen - sizeof(type))
 
 void
-rpc_handle_getfile_req(struct hdr *h, void *buf)
+rpc_handle_getfile_req(__unusedx struct hdr *h, void *buf)
 {
 	struct rpc_getfile_req *gfq = buf;
 	struct rpc_getfile_rep gfp;
 	struct stream *st;
 	struct walkarg wa;
 	struct stat stb;
+	int travflags;
 	char *base;
-	int flags;
 
 	base = gfq->fn + gfq->len;
 
 	if (stat(gfq->fn, &stb) == 0) {
 		char *p;
 
-		flags = PFL_FILEWALKF_RELPATH;
+		travflags = PFL_FILEWALKF_RELPATH;
 
 		p = strrchr(gfq->fn, '/');
 		if (p)
-			wa.trim = p - gfq->fn;
+			wa.skip = p - gfq->fn;
 		else
-			wa.trim = 0;
+			wa.skip = 0;
 		wa.prefix = base[0] ? base : ".";
+		wa.rflags = 0;
 		if (S_ISDIR(stb.st_mode) && opt_recursive)
-			flags |= PFL_FILEWALKF_RECURSIVE;
+			travflags |= PFL_FILEWALKF_RECURSIVE;
 
-		gfp.rc = pfl_filewalk(gfq->fn, flags, NULL,
+		gfp.rc = pfl_filewalk(gfq->fn, travflags, NULL,
 		    push_putfile_walkcb, &wa);
 	} else {
 		gfp.rc = errno;
@@ -202,9 +213,11 @@ void
 rpc_handle_putdata(struct hdr *h, void *buf)
 {
 	struct rpc_putdata *pd = buf;
+	struct psc_thread *thr;
+	struct recvthr *rt;
+	struct file *f;
 	ssize_t rc;
 	size_t len;
-	int fd;
 
 #if 0
 	if (h->msglen == 0 ||
@@ -217,11 +230,19 @@ rpc_handle_putdata(struct hdr *h, void *buf)
 	len = h->msglen - sizeof(*pd);
 
 //psynclog_tdebug("HANDLE PUT %lx", pd->fid);
-	fd = fcache_search(pd->fid);
-	rc = pwrite(fd, pd->data, len, pd->off);
+	f = fcache_search(pd->fid); // XXX check rt->last_f first
+	rc = pwrite(f->fd, pd->data, len, pd->off);
 	if (rc != (ssize_t)len)
 		psynclog_error("write off=%"PRId64" len=%"PRId64" "
 		    "rc=%zd", pd->off, len, rc);
+
+	thr = pscthr_get();
+	rt = thr->pscthr_private;
+	if (rt->last_f && pd->fid != rt->last_f->fid) {
+
+		fcache_close(rt->last_f);
+	}
+	rt->last_f = f;
 }
 
 void
@@ -231,8 +252,8 @@ rpc_handle_checkzero_req(struct hdr *h, void *buf)
 	struct rpc_checkzero_rep czp;
 	struct stream *st;
 	struct buf *bp;
+	struct file *f;
 	ssize_t rc;
-	int fd;
 
 #if 0
 	if (czq->len == 0 ||
@@ -242,8 +263,8 @@ rpc_handle_checkzero_req(struct hdr *h, void *buf)
 
 	bp = buf_get(czq->len);
 
-	fd = fcache_search(czq->fid);
-	rc = pread(fd, bp->buf, czq->len, czq->off);
+	f = fcache_search(czq->fid);
+	rc = pread(f->fd, bp->buf, czq->len, czq->off);
 	if (rc == -1)
 		err(1, "read");
 	if ((uint64_t)rc != czq->len)
@@ -269,14 +290,14 @@ rpc_handle_checkzero_rep(struct hdr *h, void *buf)
 void
 rpc_handle_getcksum_req(struct hdr *h, void *buf)
 {
-	struct buf *bp;
+	gcry_md_hd_t hd;
+	gcry_error_t gerr;
 	struct rpc_getcksum_req *gcq = buf;
 	struct rpc_getcksum_rep gcp;
 	struct stream *st;
-	gcry_error_t gerr;
-	gcry_md_hd_t hd;
+	struct buf *bp;
+	struct file *f;
 	ssize_t rc;
-	int fd;
 
 #if 0
 	if (czq->len == 0 ||
@@ -286,8 +307,8 @@ rpc_handle_getcksum_req(struct hdr *h, void *buf)
 
 	bp = buf_get(gcq->len);
 
-	fd = fcache_search(gcq->fid);
-	rc = pread(fd, bp->buf, gcq->len, gcq->off);
+	f = fcache_search(gcq->fid);
+	rc = pread(f->fd, bp->buf, gcq->len, gcq->off);
 	if (rc == -1)
 		err(1, "read");
 	if ((uint64_t)rc != gcq->len)
@@ -295,7 +316,7 @@ rpc_handle_getcksum_req(struct hdr *h, void *buf)
 
 	gerr = gcry_md_open(&hd, GCRY_MD_SHA256, 0);
 	if (gerr)
-		errx(1, "gcry_md_open: error=%d", gerr);
+		psync_fatalx("gcry_md_open: error=%d", gerr);
 	gcry_md_write(hd, bp->buf, rc);
 	memcpy(gcry_md_read(hd, 0), gcp.digest, ALGLEN);
 	gcry_md_close(hd);
@@ -319,7 +340,7 @@ rpc_handle_getcksum_rep(struct hdr *h, void *buf)
 /*
  * Apply substitution on filename received.
  */
-const char *
+char *
 userfn_subst(const char *fn)
 {
 	struct psc_thread *thr;
@@ -374,51 +395,73 @@ userfn_subst(const char *fn)
 	return (rt->fnbuf);
 }
 
+#define TRYDIR()							\
+	if (errno == ENOENT &&						\
+	    pn->flags & RPC_PUTNAME_F_TRYDIR)				\
+		goto begin;
+
 void
 rpc_handle_putname(struct hdr *h, void *buf)
 {
 	int fd = -1, flags = 0;
-	char objfn[PATH_MAX], ufn_buf[PATH_MAX];
-	const char *ufn, *dir, *base, *orig_ufn;
+	char *sep, *ufn, objfn[PATH_MAX];
 	struct rpc_putname *pn = buf;
-	struct stat stb;
 	mode_t mode;
-
-	// if (pn->dirlen > )
-	//  EINVAL;
-
-	orig_ufn = dir = pn->dir;
-	base = pn->dir + pn->dirlen;
-
-	if (stat(dir, &stb) == 0 && S_ISDIR(stb.st_mode)) {
-		snprintf(ufn_buf, sizeof(ufn_buf), "%s/%s", dir, base);
-		orig_ufn = ufn_buf;
-	}
+char *mkdirs_path = NULL;
 
 	/* apply incoming name substitutions */
-	ufn = userfn_subst(orig_ufn);
-psynclog_tdebug("USERFN [%lx] %s -> %s", h->xid, orig_ufn, ufn);
+	ufn = userfn_subst(pn->fn);
+psynclog_tdebug("USERFN [%lx] %s -> %s [%o]",
+    h->xid, pn->fn, ufn, pn->pstb.mode);
+
+	if ((pn->flags & RPC_PUTNAME_F_TRYDIR) == 0) {
+		/*
+		 * We might race with other threads so ensure the
+		 * directory hierarchy is intact.
+		 */
+		sep = strrchr(ufn, '/');
+		if (sep) {
+			*sep = '\0';
+psynclog_tdebug("mkdirs %s", ufn);
+mkdirs_path = pfl_strdup(ufn);
+			if (mkdirs(ufn, 0700) == -1 && errno != EEXIST)
+				psynclog_error("mkdirs %s", ufn);
+			*sep = '/';
+		}
+	}
+
+	if (0) {
+ begin:
+		sep = strrchr(ufn, '/');
+		if (sep)
+			*sep = '\0';
+		pn->flags &= ~RPC_PUTNAME_F_TRYDIR;
+	}
 
 	if (S_ISCHR(pn->pstb.mode) ||
 	    S_ISBLK(pn->pstb.mode)) {
 		if (mknod(ufn, pn->pstb.mode, pn->pstb.rdev) == -1) {
+			TRYDIR();
 			psynclog_warn("mknod %s", ufn);
 			return;
 		}
 	} else if (S_ISDIR(pn->pstb.mode)) {
+psynclog_tdebug("MKDIR %s %0o", ufn, pn->pstb.mode);
 		if (mkdir(ufn, pn->pstb.mode) == -1 &&
 		    errno != EEXIST) {
+			TRYDIR();
 			psynclog_warn("mkdir %s", ufn);
 			return;
 		}
 	} else if (S_ISFIFO(pn->pstb.mode)) {
 		if (mkfifo(ufn, pn->pstb.mode) == -1) {
+			TRYDIR();
 			psynclog_warn("mkfifo %s", ufn);
 			return;
 		}
 	} else if (S_ISLNK(pn->pstb.mode)) {
-		objns_makepath(objfn, pn->fid);
-		if (symlink(objfn, ufn) == -1) {
+		if (symlink(pn->fn + strlen(pn->fn) + 1, ufn) == -1) {
+			TRYDIR();
 			psynclog_warn("symlink %s", ufn);
 			return;
 		}
@@ -438,26 +481,40 @@ psynclog_tdebug("USERFN [%lx] %s -> %s", h->xid, orig_ufn, ufn);
 		if (bind(fd, (struct sockaddr *)&sun,
 		    sizeof(sun)) == -1) {
 			close(fd);
+
+			TRYDIR();
 			psynclog_warn("bind %s", ufn);
 			return;
 		}
 		close(fd);
 		fd = -1;
 	} else if (S_ISREG(pn->pstb.mode)) {
+		char pbuf[11];
+
 		objns_makepath(objfn, pn->fid);
-psynclog_tdebug("objfn %s", objfn);
+
 		fd = open(objfn, O_CREAT | O_RDWR, 0600);
 		if (fd == -1) {
 			psynclog_warn("open %s", ufn);
 			return;
 		}
-psynclog_tdebug("ln %s -> %s", ufn, objfn);
+int ntry=0;
+retry:
+psynclog_tdebug("ln %s -> %s [%s] %d", ufn, objfn, pfl_fmt_mode(pn->pstb.mode, pbuf), flags);
 		if (link(objfn, ufn) == -1) {
-			psynclog_warn("link %s", ufn);
+if (ntry++ < 5) {
+	usleep(1000);
+	goto retry;
+}
+			close(fd);
+
+//pfl_systemf("ls -ld '%s' >&2", mkdirs_path);
+//psynclog_warn("ln %s -> %s [%s] %d {%s}", ufn, objfn, pfl_fmt_mode(pn->pstb.mode, pbuf), flags, mkdirs_path);
+
+			TRYDIR();
+			psynclog_warn("link %s -> %s", ufn, objfn);
 			return;
 		}
-
-		fcache_insert(pn->fid, fd);
 	} else {
 		psynclog_warn("invalid mode %#o", pn->pstb.mode);
 		return;
@@ -480,6 +537,10 @@ psynclog_tdebug("ln %s -> %s", ufn, objfn);
 	/* XXX MacOS setattrlist */
 	/* XXX linux file attributes: FS_IOC_GETFLAGS */
 	/* XXX extattr */
+
+	if (fd != -1)
+		close(fd);
+	//fcache_insert(pn->fid, fd);
 }
 
 void
@@ -493,7 +554,7 @@ rpc_handle_done(struct hdr *h, void *buf)
 	if (d->clean)
 		psync_rm_objns = 1;
 	psync_recv_finished = 1;
-psynclog_tdebug("psync_recv_finished=1");
+psynclog_tdebug("psync_recv_finished=1 clean=%d", d->clean);
 }
 
 typedef void (*op_handler_t)(struct hdr *, void *);
@@ -535,15 +596,15 @@ recvthr_main(struct psc_thread *thr)
 
 		if (hdr.msglen > bufsz) {
 			if (hdr.msglen > MAX_BUFSZ)
-				errx(1, "invalid bufsz received from "
-				    "peer: %u", hdr.msglen);
+				psync_fatalx("invalid bufsz received "
+				    "from peer: %u", hdr.msglen);
 			bufsz = hdr.msglen;
 			buf = realloc(buf, bufsz);
 			if (buf == NULL)
 				err(1, NULL);
 		}
 		if (hdr.opc >= nitems(ops))
-			errx(1, "invalid opcode received from "
+			psync_fatalx("invalid opcode received from "
 			    "peer: %u", hdr.opc);
 		atomicio_read(rt->st->rfd, buf, hdr.msglen);
 

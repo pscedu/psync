@@ -62,8 +62,10 @@ struct work {
 	char			  wk_fn[PATH_MAX];
 	char			  wk_basefn[NAME_MAX + 1];
 	struct filehandle	 *wk_fh;
+	char			 *wk_buf;
 	char			  wk_host[HOST_NAME_MAX + 1];
 	int			  wk_type;
+	int			  wk_rflags;
 	size_t			  wk_len;
 	struct stat		  wk_stb;
 	uint64_t		  wk_xid;
@@ -185,16 +187,15 @@ struct psc_dynarray	 opt_include = DYNARRAY_INIT;
 struct psc_poolmaster	 buf_poolmaster;
 struct psc_poolmgr	*buf_pool;
 
+struct psc_poolmaster	 filehandles_poolmaster;
+struct psc_poolmgr	*filehandles_pool;
+
 struct psc_listcache	 workq;
 struct psc_poolmaster	 work_poolmaster;
 struct psc_poolmgr	*work_pool;
 pthread_barrier_t	 work_barrier;
 
 struct psc_iostats	 iostats;
-
-int			 nfilehandles;
-struct psc_spinlock	 filehandles_lock = SPINLOCK_INIT;
-struct psc_waitq	 filehandles_waitq = PSC_WAITQ_INIT;
 
 struct psc_dynarray	 streams = DYNARRAY_INIT;
 
@@ -360,14 +361,9 @@ filehandle_dropref(struct filehandle *fh, size_t len)
 	if (--fh->refcnt == 0 &&
 	    fh->flags & FHF_DONE) {
 		munmap(fh->base, len);
-psynclog_debug("CLOSE %d\n", fh->fd);
+psynclog_tdebug("CLOSE %d\n", fh->fd);
 		close(fh->fd);
-		PSCFREE(fh);
-
-		spinlock(&filehandles_lock);
-		nfilehandles--;
-		freelock(&filehandles_lock);
-		psc_waitq_wakeall(&filehandles_waitq);
+		psc_pool_return(filehandles_pool, fh);
 	} else
 		freelock(&fh->lock);
 }
@@ -388,7 +384,9 @@ proc_work(struct work *wk)
 		filehandle_dropref(wk->wk_fh, wk->wk_stb.st_size);
 		break;
 	case OPC_PUTNAME:
-		rpc_send_putname(wk->wk_fn, wk->wk_basefn, &wk->wk_stb);
+		rpc_send_putname(wk->wk_fn, &wk->wk_stb, wk->wk_buf,
+		    wk->wk_rflags);
+		PSCFREE(wk->wk_buf);
 		break;
 	}
 }
@@ -434,7 +432,7 @@ psynclog_tdebug("CLOSE1 %d", st->wfd);
 
 		/* wait for all other streams to finish */
 		while (psc_atomic32_read(&psync_nrecvthr) > 1)
-			usleep(10000);
+			usleep(1000);
 psynclog_tdebug("done waiting");
 
 		/* instruct remaining (first) stream cleanup */
@@ -465,8 +463,8 @@ work_getitem(int type)
  * @stb: stat(2) buffer only used during PUTs.
  */
 void
-enqueue_put(int mode, const char *srcfn, const char *dstfn,
-    const struct stat *stb)
+enqueue_put(const char *srcfn, const char *dstfn,
+    const struct stat *stb, int rflags)
 {
 	struct filehandle *fh;
 	struct work *wk;
@@ -480,23 +478,25 @@ blksz = 64 * 1024;
 	/* sending; push name first */
 	wk = work_getitem(OPC_PUTNAME);
 	memcpy(&wk->wk_stb, stb, sizeof(wk->wk_stb));
-	strlcpy(wk->wk_basefn, pfl_basename(srcfn),
-	    sizeof(wk->wk_basefn));
 	strlcpy(wk->wk_fn, dstfn, sizeof(wk->wk_fn));
+	wk->wk_rflags = rflags;
 psynclog_tdebug("PUTNAME local=%s DSTFN %s", wk->wk_fn, wk->wk_basefn);
+	if (S_ISLNK(stb->st_mode)) {
+		wk->wk_buf = PSCALLOC(PATH_MAX);
+		if (readlink(srcfn, wk->wk_buf, PATH_MAX) == -1)
+			psynclog_error("readlink %s", wk->wk_fn);
+	}
 	lc_add(&workq, wk);
 
 	if (!S_ISREG(stb->st_mode))
 		return;
 
-	fh = PSCALLOC(sizeof(*fh));
+	fh = psc_pool_get(filehandles_pool);
+	memset(fh, 0, sizeof(*fh));
+	INIT_LISTENTRY(&fh->lentry);
 	fh->fd = open(srcfn, O_RDONLY);
 	if (fh->fd == -1)
 		err(1, "%s", srcfn);
-
-	spinlock(&filehandles_lock);
-	nfilehandles++;
-	freelock(&filehandles_lock);
 
 	INIT_SPINLOCK(&fh->lock);
 	fh->base = mmap(NULL, stb->st_size, PROT_READ, MAP_FILE |
@@ -537,11 +537,14 @@ psynclog_tdebug("PUTNAME local=%s DSTFN %s", wk->wk_fn, wk->wk_basefn);
 		else
 			wk->wk_len = blksz;
 		lc_add(&workq, wk);
+
+		//pscthr_yield();
 	}
 	spinlock(&fh->lock);
 	fh->flags |= FHF_DONE;
 	psc_waitq_wakeall(&fh->wq);
 	freelock(&fh->lock);
+warnx("done with enqueueing");
 }
 
 int
@@ -549,8 +552,8 @@ push_putfile_walkcb(const char *fn, const struct stat *stb,
     __unusedx int type, __unusedx int level, void *arg)
 {
 	struct walkarg *wa = arg;
-	char *p, dstfn_buf[PATH_MAX];
-	const char *dstfn, *t;
+	char dstfn[PATH_MAX];
+	const char *t;
 	int rc = 0;
 
 #if 0
@@ -566,17 +569,18 @@ push_putfile_walkcb(const char *fn, const struct stat *stb,
 		return;
 	}
 #endif
-	t = fn + wa->trim;
+	t = fn + wa->skip;
 	while (*t == '/')
 		t++;
-	snprintf(dstfn_buf, sizeof(dstfn_buf), "%s/%s",
-	    wa->prefix, t);
-psynclog_tdebug("dstfn_buf %s", dstfn_buf);
-	p = strrchr(dstfn_buf, '/');
-	*p = '\0';
-	dstfn = dstfn_buf;
+	snprintf(dstfn, sizeof(dstfn), "%s/%s", wa->prefix, t);
+	if (level == 0)
+		strlcat(dstfn, pfl_basename(fn), sizeof(dstfn));
+
 psynclog_tdebug("ENQUEUE_PUT %s -> %s [prefix %s]", fn, dstfn, wa->prefix);
-	enqueue_put(MODE_PUT, fn, dstfn, stb);
+	if (level > 0)
+		wa->rflags &= ~RPC_PUTNAME_F_TRYDIR;
+
+	enqueue_put(fn, dstfn, stb, wa->rflags);
 	return (rc);
 }
 
@@ -593,7 +597,8 @@ psynclog_tdebug("ENQUEUE_PUT %s -> %s [prefix %s]", fn, dstfn, wa->prefix);
  *	psync remote:dir dir/
  */
 int
-walkfiles(int mode, const char *srcfn, int flags, const char *dstfn)
+walkfiles(int mode, const char *srcfn, int travflags, int rflags,
+    const char *dstfn)
 {
 	char buf[PATH_MAX];
 	const char *finalfn;
@@ -606,11 +611,12 @@ walkfiles(int mode, const char *srcfn, int flags, const char *dstfn)
 
 		p = strrchr(srcfn, '/');
 		if (p)
-			wa.trim = p - srcfn;
+			wa.skip = p - srcfn;
 		else
-			wa.trim = 0;
+			wa.skip = 0;
+		wa.rflags = rflags;
 		wa.prefix = dstfn;
-		return (pfl_filewalk(srcfn, flags, NULL,
+		return (pfl_filewalk(srcfn, travflags, NULL,
 		    push_putfile_walkcb, &wa));
 	}
 
@@ -736,7 +742,8 @@ push_files_from(struct psc_dynarray *da, char *fn,
 }
 
 int
-filesfrom(int mode, const char *fromfn, int flags, const char *dstfn)
+filesfrom(int mode, const char *fromfn, int travflags,
+    const char *dstfn)
 {
 	char fn[PATH_MAX], *p = fn;
 	int rc = 0, rv, c, lineno = 1;
@@ -753,7 +760,8 @@ filesfrom(int mode, const char *fromfn, int flags, const char *dstfn)
 			lineno++;
 			*p = '\0';
 			if (p != fn) {
-				rv = walkfiles(mode, fn, flags, dstfn);
+				rv = walkfiles(mode, fn, travflags, 0,
+				    dstfn);
 				if (rv)
 					rc = rv;
 			}
@@ -769,7 +777,7 @@ filesfrom(int mode, const char *fromfn, int flags, const char *dstfn)
 	fclose(fp);
 	if (p != fn) {
 		*p = '\0';
-		rv = walkfiles(mode, fn, flags, dstfn);
+		rv = walkfiles(mode, fn, travflags, 0, dstfn);
 		if (rv)
 			rc = rv;
 	}
@@ -805,7 +813,7 @@ puppet_mode(void)
 	rt = thr->pscthr_private = PSCALLOC(sizeof(*rt));
 	rt->st = st;
 	recvthr_main(thr);
-
+warnx("KILL %d", lc_nitems(&workq));
 	lc_kill(&workq);
 
 	//while (!psync_send_finished)
@@ -837,7 +845,7 @@ dispthr_main(struct psc_thread *thr)
 	struct timespec ts, start, d;
 	struct timeval dv;
 	double rate;
-	int sec;
+	int sec, inuse;
 
 	if (tgetent(NULL, NULL) == 1)
 		ce_seq = tgetstr("ce", &ce_seq);
@@ -863,9 +871,16 @@ dispthr_main(struct psc_thread *thr)
 
 		rate = psc_iostats_getintvrate(&iostats, 0);
 
+		POOL_LOCK(filehandles_pool);
+		inuse = filehandles_pool->ppm_total -
+		    filehandles_pool->ppm_nfree;
+		POOL_ULOCK(filehandles_pool);
+
 		psc_fmt_human(ratebuf, rate);
-		printf(" %d thr  elapsed %02d:%02d:%02d(s)  %7s/s%s\r",
-		    opt_streams, sec / 60 / 60, sec / 60, sec % 60,
+		printf(" %d thr  %6d fd  "
+		    "elapsed %02d:%02d:%02d(s)  %7s/s%s\r",
+		    opt_streams, inuse,
+		    sec / 60 / 60, sec / 60, sec % 60,
 		    ratebuf, ce_seq);
 		fflush(stdout);
 	}
@@ -946,8 +961,8 @@ getnstreams(int want)
 int
 main(int argc, char *argv[])
 {
-	int mode, flags, i, rv, rc = 0, c;
 	char *p, *fn, *host, *dstfn, *dstdir;
+	int mode, travflags, rflags, i, rv, rc = 0, c;
 	struct psc_dynarray threads = DYNARRAY_INIT;
 	struct psc_thread *thr;
 
@@ -1119,6 +1134,10 @@ main(int argc, char *argv[])
 	    PPMF_AUTO, 16, 16, 0, NULL, NULL, NULL, "work");
 	work_pool = psc_poolmaster_getmgr(&work_poolmaster);
 
+	psc_poolmaster_init(&filehandles_poolmaster, struct filehandle,
+	    lentry, PPMF_AUTO, 16, 16, 768, NULL, NULL, NULL, "fh");
+	filehandles_pool = psc_poolmaster_getmgr(&filehandles_poolmaster);
+
 	fcache_init();
 
 	lc_reginit(&workq, struct work, wk_lentry, "workq");
@@ -1178,17 +1197,17 @@ main(int argc, char *argv[])
 				p = NULL;
 		}
 		if (p && chdir(p) == -1)
-			errx(1, "%s", p);
+			psync_fatal("chdir %s", p);
 
 		host = argv[0];
 		for (i = 0; i < argc; i++) {
 			p = strchr(argv[i], ':');
 			if (p == NULL)
-				errx(1, "no source host specified");
+				psync_fatalx("no source host specified");
 			*p++ = '\0';
 			if (strcmp(argv[i], host)) {
 				errno = ENOTSUP;
-				errx(1, "multiple source hosts");
+				psync_fatal("multiple source hosts");
 			}
 			argv[i] = p;
 		}
@@ -1238,25 +1257,29 @@ main(int argc, char *argv[])
 		// XXX send nstreams request
 	}
 
-	flags = PFL_FILEWALKF_RELPATH;
+	travflags = PFL_FILEWALKF_RELPATH;
 	if (opt_recursive)
-		flags |= PFL_FILEWALKF_RECURSIVE;
+		travflags |= PFL_FILEWALKF_RECURSIVE;
 	if (opt_verbose)
-		flags |= PFL_FILEWALKF_VERBOSE;
+		travflags |= PFL_FILEWALKF_VERBOSE;
 
 	signal(SIGINT, handle_signal);
 	signal(SIGPIPE, handle_signal);
 
-	thr = pscthr_init(THRT_DISP, 0, dispthr_main, NULL, 0, "dispthr");
+	thr = pscthr_init(THRT_DISP, 0, dispthr_main, NULL, 0,
+	    "dispthr");
 	push(&threads, thr);
 
+	rflags = 0;
+	if (argc == 1)
+		rflags |= RPC_PUTNAME_F_TRYDIR;
 	for (i = 0; i < argc; i++) {
-		rv = walkfiles(mode, argv[i], flags, dstfn);
+		rv = walkfiles(mode, argv[i], travflags, rflags, dstfn);
 		if (rv)
 			rc = rv;
 	}
 	DYNARRAY_FOREACH(fn, i, &opt_files) {
-		rv = filesfrom(mode, fn, flags, dstfn);
+		rv = filesfrom(mode, fn, travflags, dstfn);
 		if (rv)
 			rc = rv;
 	}

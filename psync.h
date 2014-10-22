@@ -21,26 +21,22 @@ struct stream {
 	struct pfl_mutex	 mut;
 };
 
-struct recvthr {
-	struct stream		*st;
-	char			 fnbuf[PATH_MAX];
-};
-
 struct file {
 	struct psc_hashent       hentry;
 	uint64_t		 fid;
 	int			 fd;
 };
 
-struct xid_mapping {
-	struct psc_hashent       hentry;
-	uint64_t		 xid;
-	const char		*fn;
+struct recvthr {
+	struct stream		*st;
+	char			 fnbuf[PATH_MAX];
+	struct file		*last_f;
 };
 
 struct filehandle {
-	int			 fd;
+	struct psc_listentry	 lentry;
 	void			*base;
+	int			 fd;
 	int			 flags;
 	int			 refcnt;
 	psc_spinlock_t		 lock;
@@ -56,8 +52,9 @@ struct buf {
 };
 
 struct walkarg {
-	const char *prefix;
-	int trim;
+	const char		*prefix;
+	int			 skip;
+	int			 rflags;
 };
 
 #define push(da, ent)							\
@@ -68,31 +65,43 @@ struct walkarg {
 
 #define psynclog_debug(fmt, ...)					\
 	psclog_debug(psync_is_master ?					\
-	    "[master] " fmt : "[puppet] " fmt, ##__VA_ARGS__)
+	    "[master %d] " fmt : "[puppet %d] " fmt, getpid(),		\
+	    ##__VA_ARGS__)
 
 #define psynclog_tdebug(fmt, ...)					\
-	psclog(PLL_MAX, psync_is_master ?			\
-	    "[master] " fmt : "[puppet] " fmt, ##__VA_ARGS__)
+	psclog(PLL_MAX, psync_is_master ?				\
+	    "[master %d] " fmt : "[puppet %d] " fmt, getpid(),		\
+	    ##__VA_ARGS__)
 
 #define psynclog_warn(fmt, ...)						\
 	psclog_warn(psync_is_master ?					\
-	    "[master] " fmt : "[puppet] " fmt, ##__VA_ARGS__)
+	    "[master %d] " fmt : "[puppet %d] " fmt, getpid(),		\
+	    ##__VA_ARGS__)
 
 #define psynclog_warnx(fmt, ...)					\
 	psclog_warnx(psync_is_master ?					\
-	    "[master] " fmt : "[puppet] " fmt, ##__VA_ARGS__)
+	    "[master %d] " fmt : "[puppet %d] " fmt, getpid(),		\
+	    ##__VA_ARGS__)
 
 #define psynclog_error(fmt, ...)					\
 	psclog_error(psync_is_master ?					\
-	    "[master] " fmt : "[puppet] " fmt, ##__VA_ARGS__)
+	    "[master %d] " fmt : "[puppet %d] " fmt, getpid(),		\
+	    ##__VA_ARGS__)
 
 #define psynclog_errorx(fmt, ...)					\
 	psclog_errorx(psync_is_master ?					\
-	    "[master] " fmt : "[puppet] " fmt, ##__VA_ARGS__)
+	    "[master %d] " fmt : "[puppet %d] " fmt, getpid(),		\
+	    ##__VA_ARGS__)
 
 #define psync_fatal(fmt, ...)						\
 	psc_fatal(psync_is_master ?					\
-	    "[master] " fmt : "[puppet] " fmt, ##__VA_ARGS__)
+	    "[master %d] " fmt : "[puppet %d] " fmt, getpid(),		\
+	    ##__VA_ARGS__)
+
+#define psync_fatalx(fmt, ...)						\
+	psc_fatalx(psync_is_master ?					\
+	    "[master %d] " fmt : "[puppet %d] " fmt, getpid(),		\
+	    ##__VA_ARGS__)
 
 #define IOP_READ	0
 #define IOP_WRITE	1
@@ -113,8 +122,9 @@ ssize_t	  atomicio(int, int, void *, size_t);
 #define fcache_search(fid)	_fcache_search((fid), -1)
 #define fcache_insert(fid, fd)	_fcache_search((fid), (fd))
 
-int	 _fcache_search(uint64_t, int);
-void	  fcache_close(uint64_t);
+struct file *
+	 _fcache_search(uint64_t, int);
+void	  fcache_close(struct file *);
 void	  fcache_init(void);
 void	  fcache_destroy(void);
 
@@ -172,9 +182,5 @@ extern struct psc_poolmaster	 buf_poolmaster;
 extern struct psc_poolmgr	*buf_pool;
 
 extern struct psc_iostats	 iostats;
-
-extern int			 nfilehandles;
-extern struct psc_spinlock	 filehandles_lock;
-extern struct psc_waitq		 filehandles_waitq;
 
 #endif /* _PSYNC_H_ */

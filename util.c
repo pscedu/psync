@@ -104,15 +104,35 @@ parsesize(uint64_t *p, const char *s, uint64_t base)
 void
 psync_chown(const char *fn, uid_t uid, gid_t gid, int flags)
 {
-	if (fchownat(AT_FDCWD, fn, uid, gid, flags))
+//	static int mask;
+//
+ //retry:
+//	if (mask)
+//		flags &= ~mask;
+	if (fchownat(AT_FDCWD, fn, uid, gid, flags) == -1) {
+//		if (errno == ENOTSUP && flags & AT_SYMLINK_NOFOLLOW) {
+//			mask = AT_SYMLINK_NOFOLLOW;
+//			goto retry;
+//		}
 		psynclog_warn("chown %s", fn);
+	}
 }
 
 void
 psync_chmod(const char *fn, mode_t mode, int flags)
 {
-	if (fchmodat(AT_FDCWD, fn, mode, flags))
-		psynclog_warn("chmod %s", fn);
+	static int notsup;
+
+	if (notsup)
+		return;
+	if (fchmodat(AT_FDCWD, fn, mode, flags) == -1) {
+		int rc = errno;
+
+		if (rc == ENOTSUP && flags & AT_SYMLINK_NOFOLLOW)
+			notsup = 1;
+		else
+			psynclog_warn("chmod %s", fn); 
+	}
 }
 
 void

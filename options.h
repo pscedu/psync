@@ -37,6 +37,7 @@ enum {
 
 	/* psync specific options */
 	OPT_DSTDIR,
+	OPT_HEAD,
 	OPT_PUPPET
 };
 
@@ -139,6 +140,7 @@ struct options {
 	/* psync specific options */
 	int			 puppet;
 	int			 streams;
+	int			 head;
 	const char		*dstdir;
 };
 

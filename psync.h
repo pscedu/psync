@@ -74,7 +74,7 @@ struct walkarg {
 	    ##__VA_ARGS__)
 
 #define psynclog_tdebug(fmt, ...)					\
-	psclog(PLL_MAX, psync_is_master ?				\
+	psclog(PLL_DEBUG, psync_is_master ?				\
 	    "[master %d] " fmt : "[puppet %d] " fmt, getpid(),		\
 	    ##__VA_ARGS__)
 
@@ -165,11 +165,7 @@ extern int			 objns_depth;
 extern volatile sig_atomic_t	 exit_from_signal;
 
 extern psc_atomic32_t		 psync_xid;
-extern psc_atomic32_t		 psync_nrcvthr;
 extern int			 psync_is_master;
-extern int			 psync_rm_objns;
-extern int			 psync_send_finished;
-extern int			 psync_recv_finished;
 extern mode_t			 psync_umask;
 
 extern struct psc_dynarray	 streams;
@@ -178,5 +174,11 @@ extern struct psc_poolmaster	 buf_poolmaster;
 extern struct psc_poolmgr	*buf_pool;
 
 extern struct psc_iostats	 iostats;
+
+extern struct psc_dynarray	 wkrthrs;
+extern struct psc_dynarray	 rcvthrs;
+
+extern psc_spinlock_t		 wkrthrs_lock;
+extern psc_spinlock_t		 rcvthrs_lock;
 
 #endif /* _PSYNC_H_ */

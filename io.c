@@ -168,7 +168,7 @@ psynclog_debug("CLOSE %d\n", f->fd);
 			PSCFREE(f);
 		}
 
-	if (psync_rm_objns && objns_path[0]) {
+	if (objns_path[0]) {
 		/* unlink object namespace */
 		pfl_filewalk(objns_path, PFL_FILEWALKF_RECURSIVE, NULL,
 		    objns_rm_cb, NULL);

@@ -135,21 +135,6 @@ rpc_send_putname(struct stream *st, const char *fn,
 	stream_sendv(st, OPC_PUTNAME, iov, nio);
 }
 
-void
-rpc_send_done(struct stream *st, int clean)
-{
-	struct rpc_done d;
-	struct iovec iov;
-psynclog_tdebug("send_done");
-
-	d.clean = clean;
-
-	iov.iov_base = &d;
-	iov.iov_len = sizeof(d);
-
-	stream_sendv(st, OPC_DONE, &iov, 1);
-}
-
 #define LASTFIELDLEN(h, type) ((h)->msglen - sizeof(type))
 
 void
@@ -223,7 +208,10 @@ rpc_handle_putdata(__unusedx struct stream *st, struct hdr *h,
 	thr = pscthr_get();
 	rcvthr = thr->pscthr_private;
 	if (rcvthr->last_f && pd->fid != rcvthr->last_f->fid)
+{psynclog_tdebug("close %p", rcvthr->last_f);
+
 		fcache_close(rcvthr->last_f);
+}
 	rcvthr->last_f = f;
 }
 
@@ -362,11 +350,6 @@ userfn_subst(const char *fn)
 	return (rcvthr->fnbuf);
 }
 
-#define TRYDIR()							\
-	if (errno == ENOENT &&						\
-	    pn->flags & RPC_PUTNAME_F_TRYDIR)				\
-		goto begin;
-
 void
 rpc_handle_putname(__unusedx struct stream *st, struct hdr *h, void *buf)
 {
@@ -378,10 +361,18 @@ char *mkdirs_path = NULL;
 
 	/* apply incoming name substitutions */
 	ufn = userfn_subst(pn->fn);
-psynclog_tdebug("USERFN [%lx] %s -> %s [%o]",
-    h->xid, pn->fn, ufn, pn->pstb.mode);
+psynclog_tdebug("USERFN [%lx] %s -> %s [%o] fl %d",
+    h->xid, pn->fn, ufn, pn->pstb.mode, pn->flags);
 
-	if ((pn->flags & RPC_PUTNAME_F_TRYDIR) == 0) {
+	if (pn->flags & RPC_PUTNAME_F_TRYDIR) {
+		struct stat stb;
+
+		sep = strrchr(ufn, '/');
+		if (sep)
+			*sep = '\0';
+		if (stat(ufn, &stb) == 0 && S_ISDIR(stb.st_mode))
+			*sep = '/';
+	} else {
 		/*
 		 * We might race with other threads so ensure the
 		 * directory hierarchy is intact.
@@ -397,26 +388,9 @@ mkdirs_path = pfl_strdup(ufn);
 		}
 	}
 
-	if (0) {
-		/*
-		 * Handle PUT with a rename:
-		 *
-		 *	$ psync a remote:b
-		 *
-		 * If `b' is an existing dir, we use basename `a'.
-		 * Else, we use `b'.  If so, we end up here.
-		 */
- begin:
-		sep = strrchr(ufn, '/');
-		if (sep)
-			*sep = '\0';
-		pn->flags &= ~RPC_PUTNAME_F_TRYDIR;
-	}
-
 	if (S_ISCHR(pn->pstb.mode) ||
 	    S_ISBLK(pn->pstb.mode)) {
 		if (mknod(ufn, pn->pstb.mode, pn->pstb.rdev) == -1) {
-			TRYDIR();
 			psynclog_warn("mknod %s", ufn);
 			return;
 		}
@@ -424,19 +398,16 @@ mkdirs_path = pfl_strdup(ufn);
 psynclog_tdebug("MKDIR %s %0o", ufn, pn->pstb.mode);
 		if (mkdir(ufn, pn->pstb.mode) == -1 &&
 		    errno != EEXIST) {
-			TRYDIR();
 			psynclog_warn("mkdir %s", ufn);
 			return;
 		}
 	} else if (S_ISFIFO(pn->pstb.mode)) {
 		if (mkfifo(ufn, pn->pstb.mode) == -1) {
-			TRYDIR();
 			psynclog_warn("mkfifo %s", ufn);
 			return;
 		}
 	} else if (S_ISLNK(pn->pstb.mode)) {
 		if (symlink(pn->fn + strlen(pn->fn) + 1, ufn) == -1) {
-			TRYDIR();
 			psynclog_warn("symlink %s", ufn);
 			return;
 		}
@@ -456,8 +427,6 @@ psynclog_tdebug("MKDIR %s %0o", ufn, pn->pstb.mode);
 		if (bind(fd, (struct sockaddr *)&sun,
 		    sizeof(sun)) == -1) {
 			close(fd);
-
-			TRYDIR();
 			psynclog_warn("bind %s", ufn);
 			return;
 		}
@@ -486,7 +455,6 @@ if (ntry++ < 5) {
 //pfl_systemf("ls -ld '%s' >&2", mkdirs_path);
 //psynclog_warn("ln %s -> %s [%s] %d {%s}", ufn, objfn, pfl_fmt_mode(pn->pstb.mode, pbuf), flags, mkdirs_path);
 
-			TRYDIR();
 			psynclog_warn("link %s -> %s", ufn, objfn);
 			return;
 		}
@@ -518,21 +486,6 @@ if (ntry++ < 5) {
 	//fcache_insert(pn->fid, fd);
 }
 
-void
-rpc_handle_done(struct stream *st, struct hdr *h, void *buf)
-{
-	struct rpc_done *d = buf;
-
-	(void)st;
-	(void)h;
-	(void)buf;
-
-	if (d->clean)
-		psync_rm_objns = 1;
-	psync_recv_finished = 1;
-psynclog_tdebug("psync_recv_finished=1 clean=%d", d->clean);
-}
-
 typedef void (*op_handler_t)(struct stream *, struct hdr *, void *);
 
 op_handler_t ops[] = {
@@ -543,8 +496,7 @@ op_handler_t ops[] = {
 	rpc_handle_checkzero_rep,
 	rpc_handle_getcksum_req,
 	rpc_handle_getcksum_rep,
-	rpc_handle_putname,
-	rpc_handle_done
+	rpc_handle_putname
 };
 
 void
@@ -559,15 +511,21 @@ rcvthr_main(struct psc_thread *thr)
 	void *buf = NULL;
 	uint32_t bufsz = 0;
 	struct rcvthr *rcvthr;
+	struct stream *st;
 	struct hdr hdr;
 	ssize_t rc;
 
-	psc_atomic32_inc(&psync_nrcvthr);
+	spinlock(&rcvthrs_lock);
+	push(&rcvthrs, thr);
+	freelock(&rcvthrs_lock);
 
 	rcvthr = thr->pscthr_private;
+	st = rcvthr->st;
 	while (pscthr_run(thr)) {
-		rc = atomicio_read(rcvthr->st->rfd, &hdr, sizeof(hdr));
+		rc = atomicio_read(st->rfd, &hdr, sizeof(hdr));
 		if (rc == 0)
+			break;
+		if (exit_from_signal)
 			break;
 
 		if (hdr.msglen > bufsz) {
@@ -582,18 +540,19 @@ rcvthr_main(struct psc_thread *thr)
 		if (hdr.opc >= nitems(ops))
 			psync_fatalx("invalid opcode received from "
 			    "peer: %u", hdr.opc);
-		atomicio_read(rcvthr->st->rfd, buf, hdr.msglen);
+		atomicio_read(st->rfd, buf, hdr.msglen);
 
 		if (exit_from_signal)
 			break;
-		ops[hdr.opc](rcvthr->st, &hdr, buf);
-
-		if (exit_from_signal || psync_recv_finished)
+		ops[hdr.opc](st, &hdr, buf);
+		if (exit_from_signal)
 			break;
 	}
 
-psynclog_tdebug("recv done, CLOSE %d", rcvthr->st->rfd);
-	close(rcvthr->st->rfd);
+	close(st->rfd);
+psynclog_tdebug("recv done, CLOSE %d", st->rfd);
 
-	psc_atomic32_dec(&psync_nrcvthr);
+	spinlock(&rcvthrs_lock);
+	psc_dynarray_removeitem(&rcvthrs, thr);
+	freelock(&rcvthrs_lock);
 }

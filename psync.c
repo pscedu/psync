@@ -20,6 +20,7 @@
 #include <sys/param.h>
 #include <sys/stat.h>
 #include <sys/sysctl.h>
+#include <sys/un.h>
 
 #include <ctype.h>
 #include <err.h>
@@ -27,6 +28,7 @@
 #include <fcntl.h>
 #include <getopt.h>
 #include <sched.h>
+#include <paths.h>
 #include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
@@ -40,6 +42,7 @@
 #include "pfl/list.h"
 #include "pfl/listcache.h"
 #include "pfl/log.h"
+#include "pfl/net.h"
 #include "pfl/pfl.h"
 #include "pfl/pool.h"
 #include "pfl/random.h"
@@ -47,6 +50,7 @@
 #include "pfl/thread.h"
 #include "pfl/timerthr.h"
 #include "pfl/types.h"
+#include "pfl/umask.h"
 #include "pfl/walk.h"
 
 #include "options.h"
@@ -81,7 +85,6 @@ enum {
 
 const char		*progname;
 
-
 struct psc_poolmaster	 buf_poolmaster;
 struct psc_poolmgr	*buf_pool;
 
@@ -91,18 +94,19 @@ struct psc_poolmgr	*filehandles_pool;
 struct psc_listcache	 workq;
 struct psc_poolmaster	 work_poolmaster;
 struct psc_poolmgr	*work_pool;
-pthread_barrier_t	 work_barrier;
 
 struct psc_iostats	 iostats;
 
 struct psc_dynarray	 streams = DYNARRAY_INIT;
 
 int			 psync_is_master;	/* otherwise, is RPC puppet */
-int			 psync_rm_objns;
-int			 psync_send_finished;
-int			 psync_recv_finished;
-psc_atomic32_t		 psync_nrcvthr;
 mode_t			 psync_umask;
+
+struct psc_dynarray	 wkrthrs = DYNARRAY_INIT;
+struct psc_dynarray	 rcvthrs = DYNARRAY_INIT;
+
+psc_spinlock_t		 wkrthrs_lock = SPINLOCK_INIT;
+psc_spinlock_t		 rcvthrs_lock = SPINLOCK_INIT;
 
 void
 filehandle_dropref(struct filehandle *fh, size_t len)
@@ -121,13 +125,13 @@ psynclog_tdebug("CLOSE %d\n", fh->fd);
 void
 wkrthr_main(struct psc_thread *thr)
 {
-	static struct pfl_mutex mut = PSC_MUTEX_INIT;
-	static int finished;
-
-	int i, was_me = 0;
 	struct wkrthr *wkrthr = thr->pscthr_private;
 	struct stream *st = wkrthr->st;
 	struct work *wk;
+
+	spinlock(&wkrthrs_lock);
+	push(&wkrthrs, thr);
+	freelock(&wkrthrs_lock);
 
 	while (pscthr_run(thr)) {
 		wk = lc_getwait(&workq);
@@ -162,39 +166,13 @@ wkrthr_main(struct psc_thread *thr)
 		if (exit_from_signal)
 			break;
 	}
-psynclog_tdebug("wkrthr done");
-	pthread_barrier_wait(&work_barrier);
 
-	psc_mutex_lock(&mut);
-	if (!finished) {
-		was_me = 1;
-		finished = 1;
-	}
-	psc_mutex_unlock(&mut);
-
-	if (was_me && psync_is_master) {
-		/* close all but first stream */
-		DYNARRAY_FOREACH(st, i, &streams)
-			if (i) {
-				rpc_send_done(st, 0);
 psynclog_tdebug("CLOSE1 %d", st->wfd);
-				close(st->wfd);
-			}
+	close(st->wfd);
 
-		/* wait for all other streams to finish */
-		while (psc_atomic32_read(&psync_nrcvthr) > 1)
-			usleep(1000);
-psynclog_tdebug("done waiting");
-
-		/* instruct remaining (first) stream cleanup */
-		st = psc_dynarray_getpos(&streams, 0);
-		rpc_send_done(st, 1);
-psynclog_tdebug("CLOSE2 %d", st->wfd);
-		close(st->wfd);
-
-		psync_send_finished = 1;
-psynclog_tdebug("psync_send_finished=1");
-	}
+	spinlock(&wkrthrs_lock);
+	psc_dynarray_removeitem(&wkrthrs, thr);
+	freelock(&wkrthrs_lock);
 }
 
 struct work *
@@ -230,7 +208,7 @@ blksz = 64 * 1024;
 	memcpy(&wk->wk_stb, stb, sizeof(wk->wk_stb));
 	strlcpy(wk->wk_fn, dstfn, sizeof(wk->wk_fn));
 	wk->wk_rflags = rflags;
-psynclog_tdebug("PUTNAME local=%s DSTFN %s", wk->wk_fn, wk->wk_basefn);
+psynclog_tdebug("PUTNAME local=%s DSTFN %s fl %d", srcfn, wk->wk_fn, rflags);
 	if (S_ISLNK(stb->st_mode)) {
 		wk->wk_buf = PSCALLOC(PATH_MAX);
 		if (readlink(srcfn, wk->wk_buf, PATH_MAX) == -1)
@@ -322,16 +300,18 @@ push_putfile_walkcb(const char *fn, const struct stat *stb,
 	t = fn + wa->skip;
 	while (*t == '/')
 		t++;
-	snprintf(dstfn, sizeof(dstfn), "%s/%s", wa->prefix, t);
-	if (level == 0)
-		strlcat(dstfn, pfl_basename(fn), sizeof(dstfn));
+	rc = snprintf(dstfn, sizeof(dstfn), "%s/%s", wa->prefix, t);
+	if (rc == -1)
+		psync_fatal("snprintf");
+///	if (level == 0)
+//		strlcat(dstfn, pfl_basename(fn), sizeof(dstfn));
 
-psynclog_tdebug("ENQUEUE_PUT %s -> %s [prefix %s]", fn, dstfn, wa->prefix);
 	if (level > 0)
 		wa->rflags &= ~RPC_PUTNAME_F_TRYDIR;
+psynclog_tdebug("ENQUEUE_PUT %s -> %s [prefix %s] rfl %d", fn, dstfn, wa->prefix, wa->rflags);
 
 	enqueue_put(fn, dstfn, stb, wa->rflags);
-	return (rc);
+	return (0);
 }
 
 /*
@@ -354,6 +334,7 @@ walkfiles(int mode, const char *srcfn, int travflags, int rflags,
 	const char *finalfn;
 	struct stat tstb;
 	struct work *wk;
+	int rc;
 
 	if (mode == MODE_PUT) {
 		struct walkarg wa;
@@ -383,8 +364,10 @@ walkfiles(int mode, const char *srcfn, int travflags, int rflags,
 	 */
 	finalfn = dstfn;
 	if (stat(dstfn, &tstb) == 0 && S_ISDIR(tstb.st_mode)) {
-		snprintf(buf, sizeof(buf), "%s/%s", finalfn,
+		rc = snprintf(buf, sizeof(buf), "%s/%s", finalfn,
 		    pfl_basename(srcfn));
+		if (rc == -1)
+			psync_fatal("snprintf");
 		finalfn = buf;
 	}
 
@@ -443,13 +426,204 @@ filesfrom(int mode, const char *fromfn, int travflags,
 	return (rc);
 }
 
-int
-puppet_mode(void)
+union ctlmsg {
+	struct cmsghdr		hdr;
+	unsigned char		buf[CMSG_SPACE(sizeof(int))];
+};
+
+void
+send_fd(int s, int fd)
 {
-	struct psc_thread *rthr, *wthr;
+	struct cmsghdr *c;
+	struct iovec iov;
+	struct msghdr m;
+	union ctlmsg cm;
+	ssize_t nb;
+	int *pfd;
+	char ch;
+
+	memset(&m, 0, sizeof(m));
+	iov.iov_base = &ch;
+	iov.iov_len = 1;
+	m.msg_iov = &iov;
+	m.msg_iovlen = 1;
+	m.msg_control = cm.buf;
+	m.msg_controllen = sizeof(cm.buf);
+
+	c = CMSG_FIRSTHDR(&m);
+	c->cmsg_len = CMSG_LEN(sizeof(int));
+	c->cmsg_level = SOL_SOCKET;
+	c->cmsg_type = SCM_RIGHTS;
+
+	pfd = (void *)CMSG_DATA(c);
+	*pfd = fd;
+
+	nb = sendmsg(s, &m, MSG_WAITALL);
+	if (nb == -1)
+		psync_fatal("sendmsg");
+}
+
+int
+recv_fd(int s)
+{
+	struct cmsghdr *c;
+	struct iovec iov;
+	struct msghdr m;
+	union ctlmsg cm;
+	ssize_t rc;
+	char ch;
+
+	memset(&m, 0, sizeof(m));
+	iov.iov_base = &ch;
+	iov.iov_len = 1;
+	m.msg_iov = &iov;
+	m.msg_iovlen = 1;
+	m.msg_control = cm.buf;
+	m.msg_controllen = sizeof(cm.buf);
+
+	for (;;) {
+		rc = recvmsg(s, &m, MSG_WAITALL);
+psynclog_tdebug("recvmsg");
+		if (rc == -1) {
+			if (errno == EINTR)
+				continue;
+			psync_fatal("recvmsg");
+		}
+		break;
+	}
+	if (rc == 0)
+		psync_fatalx("recvmsg: unexpected EOF");
+	if (m.msg_flags & MSG_TRUNC ||
+	    m.msg_flags & MSG_CTRUNC)
+		psync_fatalx("recvmsg: received truncated message");
+
+	for (c = CMSG_FIRSTHDR(&m); c; c = CMSG_NXTHDR(&m, c))
+		if (c->cmsg_len == CMSG_LEN(sizeof(int)) &&
+		    c->cmsg_level == SOL_SOCKET &&
+		    c->cmsg_type == SCM_RIGHTS) {
+			int *pfd;
+
+			pfd = (void *)CMSG_DATA(c);
+			return (*pfd);
+		}
+	psync_fatalx("no fd found in ctlmsg");
+	return (-1); /* gcc */
+}
+
+int
+puppet_limb_mode(void)
+{
+	struct sockaddr_un sun;
+	int s, rc;
+	char ch;
+
+psynclog_tdebug("in limb");
+
+	s = socket(AF_LOCAL, SOCK_STREAM, 0);
+	if (s == -1)
+		psync_fatal("socket");
+
+	memset(&sun, 0, sizeof(sun));
+	sun.sun_family = AF_LOCAL;
+	SOCKADDR_SETLEN(&sun);
+	rc = snprintf(sun.sun_path, sizeof(sun.sun_path),
+	    "%s/.psync.%d.sock", _PATH_TMP, opts.puppet);
+	if (rc == -1)
+		psync_fatal("snprintf");
+	if (rc < 1 || rc > (int)sizeof(sun.sun_path))
+		psync_fatalx("snprintf: invalid path");
+
+	for (;;) {
+		if (connect(s, (struct sockaddr *)&sun,
+		    sizeof(sun)) == -1) {
+			if (errno == ENOENT) {
+				usleep(1000);
+				continue;
+			}
+			psync_fatal("connect: %s", sun.sun_path);
+		}
+		break;
+	}
+
+	send_fd(s, 0);
+	send_fd(s, 1);
+
+psynclog_tdebug("string waiting");
+	do
+		rc = read(s, &ch, 1);
+	while (rc == -1 && errno == EINTR);
+psynclog_tdebug("string exiting");
+
+	return (0);
+}
+
+void
+spawn_worker_threads(struct stream *st)
+{
+	struct psc_thread *thr;
 	struct wkrthr *wkrthr;
 	struct rcvthr *rcvthr;
+	int n;
+
+	n = psc_dynarray_len(&streams);
+
+	thr = pscthr_init(THRT_WKR, 0, wkrthr_main, NULL,
+	    sizeof(*wkrthr), "wkrthr%d", n);
+psynclog_tdebug("spawn wkrthr %p", thr);
+	wkrthr = thr->pscthr_private;
+	wkrthr->st = st;
+	pscthr_setready(thr);
+
+	thr = pscthr_init(THRT_RCV, 0, rcvthr_main, NULL,
+	    sizeof(*rcvthr), "rcvthr%d", n);
+psynclog_tdebug("spawn rcvthr %p", thr);
+	rcvthr = thr->pscthr_private;
+	rcvthr->st = st;
+	pscthr_setready(thr);
+}
+
+int
+puppet_head_mode(void)
+{
+	int i, rc, clifd, s, rfd, wfd;
+	struct psc_dynarray puppet_strings = DYNARRAY_INIT;
+	struct psc_thread *thr;
+	struct sockaddr_un sun;
 	struct stream *st;
+	mode_t old_umask;
+	void *p;
+
+	s = socket(AF_LOCAL, SOCK_STREAM, 0);
+	if (s == -1)
+		psync_fatal("socket");
+
+	memset(&sun, 0, sizeof(sun));
+	sun.sun_family = AF_LOCAL;
+	SOCKADDR_SETLEN(&sun);
+	rc = snprintf(sun.sun_path, sizeof(sun.sun_path),
+	    "%s/.psync.%d.sock", _PATH_TMP, opts.puppet);
+	if (rc == -1)
+		psync_fatal("snprintf");
+	if (rc < 1 || rc > (int)sizeof(sun.sun_path))
+		psync_fatalx("snprintf: invalid path");
+
+	if (unlink(sun.sun_path) == -1 && errno != ENOENT)
+		psynclog_error("unlink %s", sun.sun_path);
+
+	spinlock(&psc_umask_lock);
+	old_umask = umask(_S_IXUGO | S_IRWXG | S_IRWXO);
+	if (bind(s, (struct sockaddr *)&sun, sizeof(sun)) == -1)
+		psync_fatal("bind %s", sun.sun_path);
+	umask(old_umask);
+	freelock(&psc_umask_lock);
+
+	if (chmod(sun.sun_path, S_IRUSR | S_IWUSR) == -1)
+		psync_fatal("chmod %s", sun.sun_path);
+
+#define QLEN	(opts.streams * 2)
+	if (listen(s, 128) == -1)
+		psync_fatal("listen");
+psynclog_tdebug("listening on %s", sun.sun_path);
 
 	if (chdir(opts.dstdir) == -1) {
 		if (errno != EEXIST)
@@ -464,41 +638,41 @@ puppet_mode(void)
 	signal(SIGPIPE, handle_signal);
 
 	st = stream_create(STDIN_FILENO, STDOUT_FILENO);
-	psc_dynarray_add(&streams, st);
+	spawn_worker_threads(st);
 
-	wthr = pscthr_init(THRT_WKR, 0, wkrthr_main, NULL,
-	    sizeof(*wkrthr), "wkrthr");
-	wkrthr = wthr->pscthr_private;
-	wkrthr->st = st;
-	pscthr_setready(wthr);
+psynclog_tdebug("waiting for strings %d", opts.streams);
+	for (i = 1; i < opts.streams; i++) {
+		clifd = accept(s, NULL, NULL);
+		rfd = recv_fd(clifd);
+		wfd = recv_fd(clifd);
+		st = stream_create(rfd, wfd);
+		spawn_worker_threads(st);
+		push(&puppet_strings,
+		    (void *)(unsigned long)clifd);
+	}
+psynclog_tdebug("attached all strings");
 
-	/* XXX hack */
-	rthr = pscthr_get();
-	rcvthr = rthr->pscthr_private = PSCALLOC(sizeof(*rcvthr));
-	rcvthr->st = st;
-	rcvthr_main(rthr);
-warnx("KILL %d", lc_nitems(&workq));
+	close(s);
+
+	DYNARRAY_FOREACH(p, i, &rcvthrs)
+		pthread_join((pthread_t)p, NULL);
+
+psynclog_tdebug("rcvthrs done");
+
 	lc_kill(&workq);
 
-	//while (!psync_send_finished)
-		//sleep(1);
+	DYNARRAY_FOREACH(thr, i, &wkrthrs)
+		pthread_join(thr->pscthr_pthread, NULL);
+psynclog_tdebug("wkrthrs done");
 
-//psynclog_tdebug("waiting on wkrthr");
-	pthread_join(wthr->pscthr_pthread, NULL);
-
-	rpc_send_done(st, 0);
-	close(st->wfd);
+	DYNARRAY_FOREACH(p, i, &puppet_strings)
+		close((int)(unsigned long)p);
+psynclog_tdebug("strings done");
 
 	fcache_destroy();
+
 //psynclog_tdebug("exit");
 	return (0);
-}
-
-__dead void
-usage(void)
-{
-	fprintf(stderr, "usage: %s [options] src ... dst\n", progname);
-	exit(1);
 }
 
 void
@@ -520,8 +694,9 @@ dispthr_main(struct psc_thread *thr)
 	ts = start;
 	ts.tv_nsec = 0;
 	while (pscthr_run(thr)) {
-		if (psync_send_finished &&
-		    psync_recv_finished)
+		/* dispthr and tiosthr */
+		if (psc_dynarray_len(&rcvthrs) == 0 &&
+		    psc_dynarray_len(&wkrthrs) == 0)
 			break;
 
 		ts.tv_sec++;
@@ -530,21 +705,21 @@ dispthr_main(struct psc_thread *thr)
 		if (!opts.progress)
 			continue;
 
-		timespecsub(&ts, &start, &d);
-		sec = d.tv_sec;
-
-		rate = psc_iostats_getintvrate(&iostats, 0);
-
 		POOL_LOCK(filehandles_pool);
 		inuse = filehandles_pool->ppm_total -
 		    filehandles_pool->ppm_nfree;
 		POOL_ULOCK(filehandles_pool);
 
+		timespecsub(&ts, &start, &d);
+		sec = d.tv_sec;
+
+		rate = psc_iostats_getintvrate(&iostats, 0);
+
 		psc_fmt_human(ratebuf, rate);
 		printf(" %d thr  %6d fd  "
-		    "elapsed %02d:%02d:%02d(s)  %7s/s%s\r",
+		    "elapsed %3d:%02d:%02d(s)  %7s/s%s\r",
 		    opts.streams, inuse,
-		    sec / 60 / 60, sec / 60, sec % 60,
+		    sec / 60 / 60, (sec / 60) % 60, sec % 60,
 		    ratebuf, ce_seq);
 		fflush(stdout);
 	}
@@ -623,13 +798,19 @@ getnstreams(int want)
 	return (MIN(want, np));
 }
 
+__dead void
+usage(void)
+{
+	fprintf(stderr, "usage: %s [options] src ... dst\n", progname);
+	exit(1);
+}
+
 int
 main(int argc, char *argv[])
 {
 	char *p, *fn, *host, *dstfn, *dstdir;
 	int mode, travflags, rflags, i, rv, rc = 0;
-	struct psc_dynarray threads = DYNARRAY_INIT;
-	struct psc_thread *thr;
+	struct psc_thread *dispthr;
 
 #if 0
 	setenv("PSC_LOG_FORMAT", "%n: ", 0);
@@ -646,7 +827,7 @@ main(int argc, char *argv[])
 	psync_umask = umask(0);
 	umask(psync_umask);
 
-	pscthr_init(THRT_MAIN, 0, NULL, NULL, 0, "main");
+	pscthr_init(THRT_MAIN, 0, NULL, NULL, 0, "mainthr");
 
 	psc_poolmaster_init(&buf_poolmaster, struct buf, lentry,
 	    PPMF_AUTO, 16, 16, 0, NULL, NULL, NULL, "buf");
@@ -664,10 +845,10 @@ main(int argc, char *argv[])
 
 	lc_reginit(&workq, struct work, wk_lentry, "workq");
 
-	pthread_barrier_init(&work_barrier, NULL, opts.streams);
-
+	if (opts.head)
+		exit(puppet_head_mode());
 	if (opts.puppet)
-		exit(puppet_mode());
+		exit(puppet_limb_mode());
 
 	psync_is_master = 1;
 
@@ -745,8 +926,6 @@ main(int argc, char *argv[])
 	while (!opts.puppet);
 
 	for (i = 0; i < opts.streams; i++) {
-		struct wkrthr *wkrthr;
-		struct rcvthr *rcvthr;
 		struct stream *st;
 
 		/* spawning multiple ssh too quickly fails */
@@ -758,26 +937,14 @@ main(int argc, char *argv[])
 		 *	--exclude filter patterns
 		 */
 		st = stream_cmdopen("%s %s %s --PUPPET=%d --dstdir=%s "
-		    "%s %s %s",
-		    opts.rsh, host, opts.psync_path, opts.puppet, dstdir,
-		    opts.recursive	? "-r" : "",
+		    "%s %s %s %s -N%d",
+		    opts.rsh, host, opts.psync_path, opts.puppet,
+		    dstdir, i ? "" : "--HEAD",
 		    opts.perms		? "-p" : "",
-		    opts.sparse		? "-S" : "");
-		psc_dynarray_add(&streams, st);
-
-		thr = pscthr_init(THRT_RCV, 0, rcvthr_main, NULL,
-		    sizeof(*rcvthr), "rcvthr%d", i);
-		rcvthr = thr->pscthr_private;
-		rcvthr->st = st;
-		pscthr_setready(thr);
-		push(&threads, thr);
-
-		thr = pscthr_init(THRT_WKR, 0, wkrthr_main, NULL,
-		    sizeof(*wkrthr), "wkrthr%d", i);
-		wkrthr = thr->pscthr_private;
-		wkrthr->st = st;
-		pscthr_setready(thr);
-		push(&threads, thr);
+		    opts.recursive	? "-r" : "",
+		    opts.sparse		? "-S" : "",
+		    opts.streams);
+		spawn_worker_threads(st);
 
 		// XXX send nstreams request
 	}
@@ -791,9 +958,8 @@ main(int argc, char *argv[])
 	signal(SIGINT, handle_signal);
 	signal(SIGPIPE, handle_signal);
 
-	thr = pscthr_init(THRT_DISP, 0, dispthr_main, NULL, 0,
+	dispthr = pscthr_init(THRT_DISP, 0, dispthr_main, NULL, 0,
 	    "dispthr");
-	push(&threads, thr);
 
 	rflags = 0;
 	if (argc == 1)
@@ -810,15 +976,13 @@ main(int argc, char *argv[])
 	}
 	lc_kill(&workq);
 
-	DYNARRAY_FOREACH(thr, i, &threads) {
-		rv = pthread_join(thr->pscthr_pthread, NULL);
-		if (rv)
-			rc = rv;
-	}
+	while (psc_dynarray_len(&rcvthrs) || psc_dynarray_len(&wkrthrs))
+		usleep(10000);
+
+	pthread_join(dispthr->pscthr_pthread, NULL);
 
 psynclog_tdebug("exiting");
 
-	psync_rm_objns = 1;
 	fcache_destroy();
 
 	exit(rc);

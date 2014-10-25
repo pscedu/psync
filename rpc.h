@@ -18,7 +18,6 @@ struct hdr {
 #define OPC_GETCKSUM_REQ	5
 #define OPC_GETCKSUM_REP	6
 #define OPC_PUTNAME		7
-#define OPC_DONE		8
 
 struct rpc_sub_stat {
 	uint64_t		dev;
@@ -83,12 +82,6 @@ struct rpc_putname {
 
 #define RPC_PUTNAME_F_TRYDIR	(1 << 0)	/* try directory as base */
 
-struct rpc_done {
-	 int32_t		clean;
-	 int32_t		_pad;
-};
-
-void rpc_send_done(struct stream *, int);
 void rpc_send_getfile(struct stream *, uint64_t, const char *,
 	const char *);
 void rpc_send_putdata(struct stream *, uint64_t, off_t, const void *,

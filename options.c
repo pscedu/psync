@@ -18,6 +18,7 @@ struct options		 opts;
 
 struct option longopts[] = {
 	{ "8-bit-output",	NO_ARG,	NULL,			'8' },
+	{ "HEAD",		NO_ARG,	&opts.head,		OPT_HEAD },
 	{ "PUPPET",		REQARG,	NULL,			OPT_PUPPET },
 	{ "address",		REQARG,	NULL,			OPT_ADDRESS },
 	{ "append",		NO_ARG,	&opts.append,		1 },
@@ -363,7 +364,6 @@ parseopts(int argc, char **argv)
 		case OPT_PUPPET:
 			if (!parsenum(&opts.puppet, optarg, 0, 1000000))
 				err(1, "--PUPPET=%s", optarg);
-			opts.streams = 1;
 			break;
 
 		case 0:

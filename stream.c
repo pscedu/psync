@@ -126,5 +126,6 @@ stream_create(int rfd, int wfd)
 	st = PSCALLOC(sizeof(*st));
 	st->rfd = rfd;
 	st->wfd = wfd;
+	push(&streams, st);
 	return (st);
 }

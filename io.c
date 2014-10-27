@@ -121,7 +121,7 @@ fcache_close(struct file *f)
 {
 	/* XXX refcnting/race ?? */
 	psc_hashent_remove(&fcache, f);
-psynclog_tdebug("CLOSE %d\n", f->fd);
+	psynclog_diag("close fd=%d", f->fd);
 	close(f->fd);
 	PSCFREE(f);
 }
@@ -162,7 +162,6 @@ fcache_destroy(void)
 
 	PSC_HASHTBL_FOREACH_BUCKET(b, &fcache)
 		PSC_HASHBKT_FOREACH_ENTRY_SAFE(&fcache, f, fn, b) {
-psynclog_debug("CLOSE %d\n", f->fd);
 			close(f->fd);
 			psc_hashbkt_del_item(&fcache, b, f);
 			PSCFREE(f);

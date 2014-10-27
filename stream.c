@@ -66,10 +66,12 @@ stream_sendxv(struct stream *st, uint64_t xid, int opc,
 	else
 		hdr.xid = psc_atomic32_inc_getnew(&psync_xid);
 
+	spinlock(&st->lock);
 	atomicio_write(st->wfd, &hdr, sizeof(hdr));
 	for (i = 0; i < nio; i++)
 		atomicio_write(st->wfd, iov[i].iov_base,
 		    iov[i].iov_len);
+	freelock(&st->lock);
 }
 void
 stream_sendx(struct stream *st, uint64_t xid, int opc, void *p,
@@ -124,6 +126,7 @@ stream_create(int rfd, int wfd)
 	struct stream *st;
 
 	st = PSCALLOC(sizeof(*st));
+	INIT_SPINLOCK(&st->lock);
 	st->rfd = rfd;
 	st->wfd = wfd;
 	push(&streams, st);

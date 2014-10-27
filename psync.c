@@ -115,7 +115,7 @@ filehandle_dropref(struct filehandle *fh, size_t len)
 	if (--fh->refcnt == 0 &&
 	    fh->flags & FHF_DONE) {
 		munmap(fh->base, len);
-psynclog_tdebug("CLOSE %d\n", fh->fd);
+		psynclog_diag("close fd=%d", fh->fd);
 		close(fh->fd);
 		psc_pool_return(filehandles_pool, fh);
 	} else
@@ -144,7 +144,6 @@ wkrthr_main(struct psc_thread *thr)
 			    wk->wk_basefn);
 			break;
 		case OPC_PUTDATA:
-//psynclog_tdebug("PUTDATA");
 			if (opts.sparse == 0 ||
 			    !pfl_memchk(wk->wk_fh->base + wk->wk_off, 0,
 			    wk->wk_len))
@@ -167,7 +166,9 @@ wkrthr_main(struct psc_thread *thr)
 			break;
 	}
 
-psynclog_tdebug("CLOSE1 %d", st->wfd);
+	rpc_send_done(st);
+
+	psynclog_diag("wkrthr done, close fd=%d", st->wfd);
 	close(st->wfd);
 
 	spinlock(&wkrthrs_lock);
@@ -208,12 +209,13 @@ blksz = 64 * 1024;
 	memcpy(&wk->wk_stb, stb, sizeof(wk->wk_stb));
 	strlcpy(wk->wk_fn, dstfn, sizeof(wk->wk_fn));
 	wk->wk_rflags = rflags;
-psynclog_tdebug("PUTNAME local=%s DSTFN %s fl %d", srcfn, wk->wk_fn, rflags);
 	if (S_ISLNK(stb->st_mode)) {
 		wk->wk_buf = PSCALLOC(PATH_MAX);
 		if (readlink(srcfn, wk->wk_buf, PATH_MAX) == -1)
 			psynclog_error("readlink %s", wk->wk_fn);
 	}
+	psynclog_diag("enqueue PUTNAME localfn=%s dstfn=%s fl=%d",
+	    srcfn, wk->wk_fn, rflags);
 	lc_add(&workq, wk);
 
 	if (!S_ISREG(stb->st_mode))
@@ -272,7 +274,6 @@ psynclog_tdebug("PUTNAME local=%s DSTFN %s fl %d", srcfn, wk->wk_fn, rflags);
 	fh->flags |= FHF_DONE;
 	psc_waitq_wakeall(&fh->wq);
 	freelock(&fh->lock);
-warnx("done with enqueueing");
 }
 
 int
@@ -308,7 +309,6 @@ push_putfile_walkcb(const char *fn, const struct stat *stb,
 
 	if (level > 0)
 		wa->rflags &= ~RPC_PUTNAME_F_TRYDIR;
-psynclog_tdebug("ENQUEUE_PUT %s -> %s [prefix %s] rfl %d", fn, dstfn, wa->prefix, wa->rflags);
 
 	enqueue_put(fn, dstfn, stb, wa->rflags);
 	return (0);
@@ -373,7 +373,6 @@ walkfiles(int mode, const char *srcfn, int travflags, int rflags,
 
 	wk = work_getitem(OPC_GETFILE_REQ);
 	wk->wk_xid = psc_atomic32_inc_getnew(&psync_xid);
-psynclog_tdebug("MAP %lx -> %s", wk->wk_xid, finalfn);
 	strlcpy(wk->wk_fn, srcfn, sizeof(wk->wk_fn));
 	strlcpy(wk->wk_basefn, finalfn, sizeof(wk->wk_basefn));
 //	if (!opts.partial)
@@ -483,7 +482,6 @@ recv_fd(int s)
 
 	for (;;) {
 		rc = recvmsg(s, &m, MSG_WAITALL);
-psynclog_tdebug("recvmsg");
 		if (rc == -1) {
 			if (errno == EINTR)
 				continue;
@@ -517,8 +515,6 @@ puppet_limb_mode(void)
 	int s, rc;
 	char ch;
 
-psynclog_tdebug("in limb");
-
 	s = socket(AF_LOCAL, SOCK_STREAM, 0);
 	if (s == -1)
 		psync_fatal("socket");
@@ -548,11 +544,9 @@ psynclog_tdebug("in limb");
 	send_fd(s, 0);
 	send_fd(s, 1);
 
-psynclog_tdebug("string waiting");
 	do
 		rc = read(s, &ch, 1);
 	while (rc == -1 && errno == EINTR);
-psynclog_tdebug("string exiting");
 
 	return (0);
 }
@@ -569,14 +563,12 @@ spawn_worker_threads(struct stream *st)
 
 	thr = pscthr_init(THRT_WKR, 0, wkrthr_main, NULL,
 	    sizeof(*wkrthr), "wkrthr%d", n);
-psynclog_tdebug("spawn wkrthr %p", thr);
 	wkrthr = thr->pscthr_private;
 	wkrthr->st = st;
 	pscthr_setready(thr);
 
 	thr = pscthr_init(THRT_RCV, 0, rcvthr_main, NULL,
 	    sizeof(*rcvthr), "rcvthr%d", n);
-psynclog_tdebug("spawn rcvthr %p", thr);
 	rcvthr = thr->pscthr_private;
 	rcvthr->st = st;
 	pscthr_setready(thr);
@@ -587,7 +579,6 @@ puppet_head_mode(void)
 {
 	int i, rc, clifd, s, rfd, wfd;
 	struct psc_dynarray puppet_strings = DYNARRAY_INIT;
-	struct psc_thread *thr;
 	struct sockaddr_un sun;
 	struct stream *st;
 	mode_t old_umask;
@@ -623,7 +614,7 @@ puppet_head_mode(void)
 #define QLEN	(opts.streams * 2)
 	if (listen(s, 128) == -1)
 		psync_fatal("listen");
-psynclog_tdebug("listening on %s", sun.sun_path);
+	psynclog_diag("listening on %s", sun.sun_path);
 
 	if (chdir(opts.dstdir) == -1) {
 		if (errno != EEXIST)
@@ -640,7 +631,7 @@ psynclog_tdebug("listening on %s", sun.sun_path);
 	st = stream_create(STDIN_FILENO, STDOUT_FILENO);
 	spawn_worker_threads(st);
 
-psynclog_tdebug("waiting for strings %d", opts.streams);
+	psynclog_diag("waiting for %d puppet strings", opts.streams);
 	for (i = 1; i < opts.streams; i++) {
 		clifd = accept(s, NULL, NULL);
 		rfd = recv_fd(clifd);
@@ -650,28 +641,26 @@ psynclog_tdebug("waiting for strings %d", opts.streams);
 		push(&puppet_strings,
 		    (void *)(unsigned long)clifd);
 	}
-psynclog_tdebug("attached all strings");
+	psynclog_diag("attached all puppet strings");
 
 	close(s);
 
-	DYNARRAY_FOREACH(p, i, &rcvthrs)
-		pthread_join((pthread_t)p, NULL);
+	while (psc_dynarray_len(&rcvthrs))
+		usleep(10000);
 
-psynclog_tdebug("rcvthrs done");
+	psynclog_diag("rcvthrs done");
 
 	lc_kill(&workq);
 
-	DYNARRAY_FOREACH(thr, i, &wkrthrs)
-		pthread_join(thr->pscthr_pthread, NULL);
-psynclog_tdebug("wkrthrs done");
+	while (psc_dynarray_len(&wkrthrs))
+		usleep(10000);
+	psynclog_diag("wkrthrs done");
 
 	DYNARRAY_FOREACH(p, i, &puppet_strings)
 		close((int)(unsigned long)p);
-psynclog_tdebug("strings done");
 
 	fcache_destroy();
 
-//psynclog_tdebug("exit");
 	return (0);
 }
 
@@ -980,8 +969,6 @@ main(int argc, char *argv[])
 		usleep(10000);
 
 	pthread_join(dispthr->pscthr_pthread, NULL);
-
-psynclog_tdebug("exiting");
 
 	fcache_destroy();
 

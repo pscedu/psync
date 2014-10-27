@@ -20,6 +20,8 @@ struct psc_thread;
 struct stream {
 	int			 rfd;
 	int			 wfd;
+	int			 done;
+	psc_spinlock_t		 lock;
 };
 
 struct file {
@@ -68,45 +70,17 @@ struct walkarg {
 			psync_fatal("out of memory");			\
 	} while (0)
 
-#define psynclog_debug(fmt, ...)					\
-	psclog_debug(psync_is_master ?					\
-	    "[master %d] " fmt : "[puppet %d] " fmt, getpid(),		\
-	    ##__VA_ARGS__)
+#define PSYNC_LOG_TAG(fmt)						\
+	psync_is_master ? "[master %d] " fmt : "[puppet %d] " fmt, getpid()
 
-#define psynclog_tdebug(fmt, ...)					\
-	psclog(PLL_DEBUG, psync_is_master ?				\
-	    "[master %d] " fmt : "[puppet %d] " fmt, getpid(),		\
-	    ##__VA_ARGS__)
-
-#define psynclog_warn(fmt, ...)						\
-	psclog_warn(psync_is_master ?					\
-	    "[master %d] " fmt : "[puppet %d] " fmt, getpid(),		\
-	    ##__VA_ARGS__)
-
-#define psynclog_warnx(fmt, ...)					\
-	psclog_warnx(psync_is_master ?					\
-	    "[master %d] " fmt : "[puppet %d] " fmt, getpid(),		\
-	    ##__VA_ARGS__)
-
-#define psynclog_error(fmt, ...)					\
-	psclog_error(psync_is_master ?					\
-	    "[master %d] " fmt : "[puppet %d] " fmt, getpid(),		\
-	    ##__VA_ARGS__)
-
-#define psynclog_errorx(fmt, ...)					\
-	psclog_errorx(psync_is_master ?					\
-	    "[master %d] " fmt : "[puppet %d] " fmt, getpid(),		\
-	    ##__VA_ARGS__)
-
-#define psync_fatal(fmt, ...)						\
-	psc_fatal(psync_is_master ?					\
-	    "[master %d] " fmt : "[puppet %d] " fmt, getpid(),		\
-	    ##__VA_ARGS__)
-
-#define psync_fatalx(fmt, ...)						\
-	psc_fatalx(psync_is_master ?					\
-	    "[master %d] " fmt : "[puppet %d] " fmt, getpid(),		\
-	    ##__VA_ARGS__)
+#define psynclog_max(fmt, ...)		psclog_max(PSYNC_LOG_TAG(fmt), ##__VA_ARGS__)
+#define psynclog_diag(fmt, ...)		psclog_diag(PSYNC_LOG_TAG(fmt), ##__VA_ARGS__)
+#define psynclog_warn(fmt, ...)		psclog_warn(PSYNC_LOG_TAG(fmt), ##__VA_ARGS__)
+#define psynclog_warnx(fmt, ...)	psclog_warnx(PSYNC_LOG_TAG(fmt), ##__VA_ARGS__)
+#define psynclog_error(fmt, ...)	psclog_error(PSYNC_LOG_TAG(fmt), ##__VA_ARGS__)
+#define psynclog_errorx(fmt, ...)	psclog_errorx(PSYNC_LOG_TAG(fmt), ##__VA_ARGS__)
+#define psync_fatal(fmt, ...)		psc_fatal(PSYNC_LOG_TAG(fmt), ##__VA_ARGS__)
+#define psync_fatalx(fmt, ...)		psc_fatalx(PSYNC_LOG_TAG(fmt), ##__VA_ARGS__)
 
 #define IOP_READ	0
 #define IOP_WRITE	1
@@ -164,7 +138,6 @@ extern int			 objns_depth;
 
 extern volatile sig_atomic_t	 exit_from_signal;
 
-extern psc_atomic32_t		 psync_xid;
 extern int			 psync_is_master;
 extern mode_t			 psync_umask;
 

@@ -67,11 +67,11 @@ rpc_send_getfile(struct stream *st, uint64_t xid, const char *fn,
 
 	iov[1].iov_base = (void *)fn;
 	iov[1].iov_len = gfq.len = strlen(fn) + 1;
-psynclog_tdebug("SEND GETFILE %lx", xid);
 
 	iov[2].iov_base = (void *)base;
 	iov[2].iov_len = strlen(fn) + 1;
 
+	psynclog_diag("send GETFILE_REQ xid=%#"PRIx64, xid);
 	stream_sendxv(st, xid, OPC_GETFILE_REQ, iov, nitems(iov));
 }
 
@@ -85,7 +85,6 @@ rpc_send_putdata(struct stream *st, uint64_t fid, off_t off,
 	memset(&pd, 0, sizeof(pd));
 	pd.fid = fid;
 	pd.off = off;
-//psynclog_tdebug("PUT %lx", pd.fid);
 
 	iov[0].iov_base = &pd;
 	iov[0].iov_len = sizeof(pd);
@@ -93,6 +92,8 @@ rpc_send_putdata(struct stream *st, uint64_t fid, off_t off,
 	iov[1].iov_base = (void *)buf;
 	iov[1].iov_len = len;
 
+	psynclog_diag("send PUTDATA fid=%#"PRIx64" len=%zd", pd.fid,
+	    len);
 	stream_sendv(st, OPC_PUTDATA, iov, nitems(iov));
 }
 
@@ -135,6 +136,16 @@ rpc_send_putname(struct stream *st, const char *fn,
 	stream_sendv(st, OPC_PUTNAME, iov, nio);
 }
 
+void
+rpc_send_done(struct stream *st)
+{
+	struct iovec iov;
+
+	iov.iov_len = 0;
+
+	stream_sendv(st, OPC_DONE, &iov, 1);
+}
+
 #define LASTFIELDLEN(h, type) ((h)->msglen - sizeof(type))
 
 void
@@ -169,9 +180,9 @@ rpc_handle_getfile_req(struct stream *st, __unusedx struct hdr *h,
 		    push_putfile_walkcb, &wa);
 	} else {
 		gfp.rc = errno;
-psynclog_tdebug("getfile %d", errno);
 	}
 
+	psynclog_diag("send GETFILE_REP rc=%d", errno);
 	stream_send(st, OPC_GETFILE_REP, &gfp, sizeof(gfp));
 }
 
@@ -198,7 +209,8 @@ rpc_handle_putdata(__unusedx struct stream *st, struct hdr *h,
 
 	len = h->msglen - sizeof(*pd);
 
-//psynclog_tdebug("HANDLE PUT %lx", pd->fid);
+	psynclog_diag("handle PUTDATA fid=%#"PRIx64, pd->fid);
+
 	f = fcache_search(pd->fid); // XXX check rcvthr->last_f first
 	rc = pwrite(f->fd, pd->data, len, pd->off);
 	if (rc != (ssize_t)len)
@@ -208,10 +220,7 @@ rpc_handle_putdata(__unusedx struct stream *st, struct hdr *h,
 	thr = pscthr_get();
 	rcvthr = thr->pscthr_private;
 	if (rcvthr->last_f && pd->fid != rcvthr->last_f->fid)
-{psynclog_tdebug("close %p", rcvthr->last_f);
-
 		fcache_close(rcvthr->last_f);
-}
 	rcvthr->last_f = f;
 }
 
@@ -357,12 +366,12 @@ rpc_handle_putname(__unusedx struct stream *st, struct hdr *h, void *buf)
 	char *sep, *ufn, objfn[PATH_MAX];
 	struct rpc_putname *pn = buf;
 	mode_t mode;
-char *mkdirs_path = NULL;
 
 	/* apply incoming name substitutions */
 	ufn = userfn_subst(pn->fn);
-psynclog_tdebug("USERFN [%lx] %s -> %s [%o] fl %d",
-    h->xid, pn->fn, ufn, pn->pstb.mode, pn->flags);
+	psynclog_diag("handle PUTNAME xid=%#"PRIx64" %s -> %s "
+	    "mode=%0o flags=%d",
+	    h->xid, pn->fn, ufn, pn->pstb.mode, pn->flags);
 
 	if (pn->flags & RPC_PUTNAME_F_TRYDIR) {
 		struct stat stb;
@@ -380,8 +389,6 @@ psynclog_tdebug("USERFN [%lx] %s -> %s [%o] fl %d",
 		sep = strrchr(ufn, '/');
 		if (sep) {
 			*sep = '\0';
-psynclog_tdebug("mkdirs %s", ufn);
-mkdirs_path = pfl_strdup(ufn);
 			if (mkdirs(ufn, 0700) == -1 && errno != EEXIST)
 				psynclog_error("mkdirs %s", ufn);
 			*sep = '/';
@@ -395,7 +402,6 @@ mkdirs_path = pfl_strdup(ufn);
 			return;
 		}
 	} else if (S_ISDIR(pn->pstb.mode)) {
-psynclog_tdebug("MKDIR %s %0o", ufn, pn->pstb.mode);
 		if (mkdir(ufn, pn->pstb.mode) == -1 &&
 		    errno != EEXIST) {
 			psynclog_warn("mkdir %s", ufn);
@@ -434,6 +440,7 @@ psynclog_tdebug("MKDIR %s %0o", ufn, pn->pstb.mode);
 		fd = -1;
 	} else if (S_ISREG(pn->pstb.mode)) {
 		char pbuf[11];
+		int ntries = 0;
 
 		objns_makepath(objfn, pn->fid);
 
@@ -442,19 +449,22 @@ psynclog_tdebug("MKDIR %s %0o", ufn, pn->pstb.mode);
 			psynclog_warn("open %s", ufn);
 			return;
 		}
-int ntry=0;
-retry:
-psynclog_tdebug("ln %s -> %s [%s] %d", ufn, objfn, pfl_fmt_mode(pn->pstb.mode, pbuf), flags);
+ retry:
 		if (link(objfn, ufn) == -1) {
-if (ntry++ < 5) {
-	usleep(1000);
-	goto retry;
-}
+			/*
+			 * Ugly race workaround hack: on some file
+			 * systems, we seem to actually race between
+			 * mkdirs() above and the dir actually being
+			 * there when the create happens, so try a few
+			 * times.  We should technically do this for all
+			 * file types.
+			 */
+#define MAX_TRIES 5
+			if (ntries++ < MAX_TRIES) {
+				usleep(1000);
+				goto retry;
+			}
 			close(fd);
-
-//pfl_systemf("ls -ld '%s' >&2", mkdirs_path);
-//psynclog_warn("ln %s -> %s [%s] %d {%s}", ufn, objfn, pfl_fmt_mode(pn->pstb.mode, pbuf), flags, mkdirs_path);
-
 			psynclog_warn("link %s -> %s", ufn, objfn);
 			return;
 		}
@@ -483,7 +493,14 @@ if (ntry++ < 5) {
 
 	if (fd != -1)
 		close(fd);
-	//fcache_insert(pn->fid, fd);
+}
+
+void
+rpc_handle_done(struct stream *st, __unusedx struct hdr *h,
+    __unusedx void *buf)
+{
+	psynclog_diag("handle DONE");
+	st->done = 1;
 }
 
 typedef void (*op_handler_t)(struct stream *, struct hdr *, void *);
@@ -496,7 +513,8 @@ op_handler_t ops[] = {
 	rpc_handle_checkzero_rep,
 	rpc_handle_getcksum_req,
 	rpc_handle_getcksum_rep,
-	rpc_handle_putname
+	rpc_handle_putname,
+	rpc_handle_done
 };
 
 void
@@ -545,12 +563,12 @@ rcvthr_main(struct psc_thread *thr)
 		if (exit_from_signal)
 			break;
 		ops[hdr.opc](st, &hdr, buf);
-		if (exit_from_signal)
+		if (exit_from_signal || st->done)
 			break;
 	}
 
+	psynclog_diag("rcvthr done, close fd=%d", st->rfd);
 	close(st->rfd);
-psynclog_tdebug("recv done, CLOSE %d", st->rfd);
 
 	spinlock(&rcvthrs_lock);
 	psc_dynarray_removeitem(&rcvthrs, thr);

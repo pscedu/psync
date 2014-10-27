@@ -17,7 +17,7 @@
 #include "psync.h"
 #include "rpc.h"
 
-psc_atomic32_t psync_xid;
+psc_atomic64_t psync_xid;
 
 ssize_t
 atomicio(int op, int fd, void *buf, size_t len)
@@ -64,7 +64,7 @@ stream_sendxv(struct stream *st, uint64_t xid, int opc,
 	if (xid)
 		hdr.xid = xid;
 	else
-		hdr.xid = psc_atomic32_inc_getnew(&psync_xid);
+		hdr.xid = psc_atomic64_inc_getnew(&psync_xid);
 
 	spinlock(&st->lock);
 	atomicio_write(st->wfd, &hdr, sizeof(hdr));

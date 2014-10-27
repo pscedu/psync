@@ -439,7 +439,6 @@ rpc_handle_putname(__unusedx struct stream *st, struct hdr *h, void *buf)
 		close(fd);
 		fd = -1;
 	} else if (S_ISREG(pn->pstb.mode)) {
-		char pbuf[11];
 		int ntries = 0;
 
 		objns_makepath(objfn, pn->fid);

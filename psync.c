@@ -372,7 +372,7 @@ walkfiles(int mode, const char *srcfn, int travflags, int rflags,
 	}
 
 	wk = work_getitem(OPC_GETFILE_REQ);
-	wk->wk_xid = psc_atomic32_inc_getnew(&psync_xid);
+	wk->wk_xid = psc_atomic64_inc_getnew(&psync_xid);
 	strlcpy(wk->wk_fn, srcfn, sizeof(wk->wk_fn));
 	strlcpy(wk->wk_basefn, finalfn, sizeof(wk->wk_basefn));
 //	if (!opts.partial)

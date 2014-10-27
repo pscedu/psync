@@ -71,7 +71,7 @@ struct walkarg {
 	} while (0)
 
 #define PSYNC_LOG_TAG(fmt)						\
-	psync_is_master ? "[master %d] " fmt : "[puppet %d] " fmt, getpid()
+	psync_is_master ? "[master] " fmt : "[puppet] " fmt
 
 #define psynclog_max(fmt, ...)		psclog_max(PSYNC_LOG_TAG(fmt), ##__VA_ARGS__)
 #define psynclog_diag(fmt, ...)		psclog_diag(PSYNC_LOG_TAG(fmt), ##__VA_ARGS__)
@@ -139,6 +139,7 @@ extern int			 objns_depth;
 extern volatile sig_atomic_t	 exit_from_signal;
 
 extern int			 psync_is_master;
+psc_atomic64_t			 psync_xid;
 extern mode_t			 psync_umask;
 
 extern struct psc_dynarray	 streams;

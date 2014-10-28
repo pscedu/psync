@@ -723,7 +723,7 @@ dispthr_main(struct psc_thread *thr)
 		psc_fmt_human(totalbuf, tnb);
 		psc_fmt_human(xferbuf, xnb);
 		flockfile(stdout);
-		printf("%d thr  "
+		printf(" %d thr  "
 		    "elapsed %3d:%02d:%02d  "
 		    "%s xfer  "
 		    "%s ",

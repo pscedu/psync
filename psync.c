@@ -108,12 +108,14 @@ struct psc_dynarray	 rcvthrs = DYNARRAY_INIT;
 psc_spinlock_t		 wkrthrs_lock = SPINLOCK_INIT;
 psc_spinlock_t		 rcvthrs_lock = SPINLOCK_INIT;
 
+psc_atomic64_t		 nbytes_total = PSC_ATOMIC64_INIT(0);
+psc_atomic64_t		 nbytes_xfer = PSC_ATOMIC64_INIT(0);
+
 void
 filehandle_dropref(struct filehandle *fh, size_t len)
 {
 	spinlock(&fh->lock);
-	if (--fh->refcnt == 0 &&
-	    fh->flags & FHF_DONE) {
+	if (--fh->refcnt == 0) {
 		munmap(fh->base, len);
 		psynclog_diag("close fd=%d", fh->fd);
 		close(fh->fd);
@@ -150,6 +152,7 @@ wkrthr_main(struct psc_thread *thr)
 				rpc_send_putdata(st, wk->wk_stb.st_ino,
 				    wk->wk_off, wk->wk_fh->base +
 				    wk->wk_off, wk->wk_len);
+			psc_atomic64_add(&nbytes_xfer, wk->wk_len);
 			filehandle_dropref(wk->wk_fh,
 			    wk->wk_stb.st_size);
 			break;
@@ -214,7 +217,7 @@ blksz = 64 * 1024;
 		if (readlink(srcfn, wk->wk_buf, PATH_MAX) == -1)
 			psynclog_error("readlink %s", wk->wk_fn);
 	}
-	psynclog_diag("enqueue PUTNAME localfn=%s dstfn=%s fl=%d",
+	psynclog_diag("enqueue PUTNAME localfn=%s dstfn=%s flags=%d",
 	    srcfn, wk->wk_fn, rflags);
 	lc_add(&workq, wk);
 
@@ -223,14 +226,18 @@ blksz = 64 * 1024;
 
 	fh = psc_pool_get(filehandles_pool);
 	memset(fh, 0, sizeof(*fh));
+	INIT_SPINLOCK(&fh->lock);
 	INIT_LISTENTRY(&fh->lentry);
+	fh->refcnt++;
+
 	fh->fd = open(srcfn, O_RDONLY);
 	if (fh->fd == -1)
 		err(1, "%s", srcfn);
 
-	INIT_SPINLOCK(&fh->lock);
 	fh->base = mmap(NULL, stb->st_size, PROT_READ, MAP_FILE |
 	    MAP_SHARED, fh->fd, 0);
+
+	psc_atomic64_add(&nbytes_total, stb->st_size);
 
 	/* push data chunks */
 	for (; off < stb->st_size; off += blksz) {
@@ -268,12 +275,9 @@ blksz = 64 * 1024;
 			wk->wk_len = blksz;
 		lc_add(&workq, wk);
 
-		//pscthr_yield();
+		pscthr_yield();
 	}
-	spinlock(&fh->lock);
-	fh->flags |= FHF_DONE;
-	psc_waitq_wakeall(&fh->wq);
-	freelock(&fh->lock);
+	filehandle_dropref(fh, stb->st_size);
 }
 
 int
@@ -617,10 +621,13 @@ puppet_head_mode(void)
 	psynclog_diag("listening on %s", sun.sun_path);
 
 	if (chdir(opts.dstdir) == -1) {
+		char *sep;
+
 		if (errno != EEXIST)
 			psync_fatal("%s", opts.dstdir);
-		if (mkdir(opts.dstdir, 0755) == -1)
-			psync_fatal("%s", opts.dstdir);
+		sep = strchr(opts.dstdir, '/');
+		if (sep)
+			*sep = '\0';
 		if (chdir(opts.dstdir) == -1)
 			psync_fatal("%s", opts.dstdir);
 	}
@@ -667,12 +674,15 @@ puppet_head_mode(void)
 void
 dispthr_main(struct psc_thread *thr)
 {
+	char totalbuf[PSCFMT_HUMAN_BUFSIZ], xferbuf[PSCFMT_HUMAN_BUFSIZ];
 	char *ce_seq = NULL, ratebuf[PSCFMT_HUMAN_BUFSIZ];
+	char ratbuf[PSCFMT_RATIO_BUFSIZ];
 	struct psc_waitq wq = PSC_WAITQ_INIT;
 	struct timespec ts, start, d;
 	struct timeval dv;
+	uint64_t xnb, tnb;
 	double rate;
-	int sec, inuse;
+	int sec;
 
 	if (tgetent(NULL, NULL) == 1)
 		ce_seq = tgetstr("ce", &ce_seq);
@@ -694,23 +704,41 @@ dispthr_main(struct psc_thread *thr)
 		if (!opts.progress)
 			continue;
 
+#if 0
 		POOL_LOCK(filehandles_pool);
-		inuse = filehandles_pool->ppm_total -
+		nfd = filehandles_pool->ppm_total -
 		    filehandles_pool->ppm_nfree;
 		POOL_ULOCK(filehandles_pool);
+#endif
 
 		timespecsub(&ts, &start, &d);
 		sec = d.tv_sec;
 
 		rate = psc_iostats_getintvrate(&iostats, 0);
 
+		tnb = psc_atomic64_read(&nbytes_total);
+		xnb = psc_atomic64_read(&nbytes_xfer);
+
 		psc_fmt_human(ratebuf, rate);
-		printf(" %d thr  %6d fd  "
-		    "elapsed %3d:%02d:%02d(s)  %7s/s%s\r",
-		    opts.streams, inuse,
+		psc_fmt_human(totalbuf, tnb);
+		psc_fmt_human(xferbuf, xnb);
+		flockfile(stdout);
+		printf("%d thr  "
+		    "elapsed %3d:%02d:%02d  "
+		    "%s xfer  "
+		    "%s ",
+		    opts.streams,
 		    sec / 60 / 60, (sec / 60) % 60, sec % 60,
-		    ratebuf, ce_seq);
+		    xferbuf, totalbuf);
+		if (workq.plc_flags & PLCF_DYING) {
+			psc_fmt_ratio(ratbuf, xnb, tnb);
+			printf("total %6s    ", ratbuf);
+		} else {
+			printf("calculating...  ");
+		}
+		printf("%7s/s%s\r", ratebuf, ce_seq);
 		fflush(stdout);
+		funlockfile(stdout);
 	}
 	if (!opts.progress)
 		return;
@@ -721,10 +749,11 @@ dispthr_main(struct psc_thread *thr)
 	dv.tv_usec = d.tv_nsec / 1000;
 	rate = psc_iostats_calcrate(iostats.ist_len_total, &dv);
 	psc_fmt_human(ratebuf, rate);
+	psc_fmt_human(totalbuf, psc_atomic64_read(&nbytes_total));
 
-	printf("summary: elapsed %02d:%02d:%02d.%02d(s) avg %7s/s%s\n",
-	    sec / 60 / 60, sec / 60, sec % 60,
-	    (int)(d.tv_nsec / 10000000), ratebuf, ce_seq);
+	printf("elapsed %02d:%02d:%02d.%02d  %s total  avg %7s/s%s\n",
+	    sec / 60 / 60, (sec / 60) % 60, sec % 60,
+	    (int)(d.tv_nsec / 10000000), totalbuf, ratebuf, ce_seq);
 }
 
 int
@@ -827,7 +856,7 @@ main(int argc, char *argv[])
 	work_pool = psc_poolmaster_getmgr(&work_poolmaster);
 
 	psc_poolmaster_init(&filehandles_poolmaster, struct filehandle,
-	    lentry, PPMF_AUTO, 16, 16, 768, NULL, NULL, NULL, "fh");
+	    lentry, PPMF_AUTO, 16, 16, 512, NULL, NULL, NULL, "fh");
 	filehandles_pool = psc_poolmaster_getmgr(&filehandles_poolmaster);
 
 	fcache_init();

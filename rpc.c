@@ -191,6 +191,7 @@ rpc_handle_getfile_rep(struct stream *st, struct hdr *h, void *buf)
 {
 	struct rpc_getfile_rep *gfp = buf;
 
+	//psc_atomic64_add(&nbytes_total, stb->st_size);
 	(void)st;
 	(void)h;
 	(void)gfp;
@@ -207,18 +208,22 @@ rpc_handle_putdata(__unusedx struct stream *st, struct hdr *h,
 	ssize_t rc;
 	size_t len;
 
+	thr = pscthr_get();
+	rcvthr = thr->pscthr_private;
+
 	len = h->msglen - sizeof(*pd);
 
 	psynclog_diag("handle PUTDATA fid=%#"PRIx64, pd->fid);
 
-	f = fcache_search(pd->fid); // XXX check rcvthr->last_f first
+	if (rcvthr->last_f && pd->fid == rcvthr->last_f->fid)
+		f = rcvthr->last_f;
+	else
+		f = fcache_search(pd->fid);
 	rc = pwrite(f->fd, pd->data, len, pd->off);
 	if (rc != (ssize_t)len)
 		psynclog_error("write off=%"PRId64" len=%"PRId64" "
 		    "rc=%zd", pd->off, len, rc);
 
-	thr = pscthr_get();
-	rcvthr = thr->pscthr_private;
 	if (rcvthr->last_f && pd->fid != rcvthr->last_f->fid)
 		fcache_close(rcvthr->last_f);
 	rcvthr->last_f = f;

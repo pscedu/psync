@@ -27,7 +27,9 @@ struct stream {
 struct file {
 	struct psc_hashent       hentry;
 	uint64_t		 fid;
+	psc_spinlock_t		 lock;
 	int			 fd;
+	int			 refcnt;
 };
 
 struct wkrthr {
@@ -44,13 +46,10 @@ struct filehandle {
 	struct psc_listentry	 lentry;
 	void			*base;
 	int			 fd;
-	int			 flags;
 	int			 refcnt;
 	psc_spinlock_t		 lock;
 	struct psc_waitq	 wq;
 };
-
-#define FHF_DONE		(1 << 0)
 
 struct buf {
 	struct psc_listentry	 lentry;

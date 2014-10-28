@@ -78,20 +78,32 @@ objns_makepath(char *fn, uint64_t fid)
 	snprintf(p, PATH_MAX - (p - fn), "%016"PRIx64, fid);
 }
 
+void
+fcache_found(void *p)
+{
+	struct file *f = p;
+
+	spinlock(&f->lock);
+	f->refcnt++;
+}
+
 struct file *
 _fcache_search(uint64_t fid, int fd)
 {
 	struct psc_hashbkt *b;
 	struct file *f;
 
-	f = psc_hashtbl_search(&fcache, NULL, NULL, &fid);
+	f = psc_hashtbl_search(&fcache, NULL, fcache_found, &fid);
 	if (f)
-		return (f);
+		goto out;
 
 	b = psc_hashbkt_get(&fcache, &fid);
-	f = psc_hashbkt_search(&fcache, b, NULL, NULL, &fid);
+	f = psc_hashbkt_search(&fcache, b, NULL, fcache_found, &fid);
 	if (f == NULL) {
 		f = PSCALLOC(sizeof(*f));
+		INIT_SPINLOCK(&f->lock);
+		f->refcnt = 1;
+		spinlock(&f->lock);
 		psc_hashent_init(&fcache, f);
 		f->fid = fid;
 
@@ -111,26 +123,35 @@ _fcache_search(uint64_t fid, int fd)
 	}
 	psc_hashbkt_put(&fcache, b);
 
+ out:
 	if (fd != -1)
 		close(fd);
+	freelock(&f->lock);
 	return (f);
 }
 
 void
 fcache_close(struct file *f)
 {
-	/* XXX refcnting/race ?? */
-	psc_hashent_remove(&fcache, f);
-	psynclog_diag("close fd=%d", f->fd);
-	close(f->fd);
-	PSCFREE(f);
+	struct psc_hashbkt *b;
+
+	b = psc_hashent_getbucket(&fcache, f);
+	spinlock(&f->lock);
+	if (--f->refcnt == 0) {
+		psc_hashent_remove(&fcache, f);
+		psynclog_diag("close fd=%d", f->fd);
+		close(f->fd);
+		PSCFREE(f);
+	} else
+		freelock(&f->lock);
+	psc_hashbkt_put(&fcache, b);
 }
 
 void
 fcache_init(void)
 {
 	/*
-	 * To saturate a 100Gb/sec pipe with 4k files, we need
+	 * To saturate a 100Gbps pipe with, say, 4k-sized files, we need
 	 * to send about 3 million in parallel...
 	 */
 	psc_hashtbl_init(&fcache, 0, struct file, fid, hentry, 191,

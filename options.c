@@ -233,7 +233,7 @@ parseopts(int argc, char **argv)
 	opts.streams = getnstreams(MAX_STREAMS);
 
 	while ((c = getopt_long(argc, argv,
-	    "0468aB:bCcdEEe:f:gHhIiKkLlmN:nOoPpqRrST:tuVvWxyz", longopts,
+	    "0468aB:bCcDdEEe:f:gHhIiKkLlmN:nOoPpqRrST:tuVvWxyz", longopts,
 	    NULL)) != -1) {
 		switch (c) {
 		case '0':		opts.from0 = 1;			break;
@@ -255,6 +255,8 @@ parseopts(int argc, char **argv)
 		case 'b':		opts.backup = 1;		break;
 		case 'C':		opts.cvs_exclude = 1;		break;
 		case 'c':		opts.checksum = 1;		break;
+		case 'D':		opts.devices = 1;
+					opts.specials = 1;		break;
 		case 'd':		opts.dirs = 1;			break;
 		case 'E':		opts.extended_attributes = 1;	break;
 		case 'e':		opts.rsh = optarg;		break;

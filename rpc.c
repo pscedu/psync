@@ -477,8 +477,13 @@ rpc_handle_putname(__unusedx struct stream *st, struct hdr *h, void *buf)
 		return;
 	}
 
-	if (opts.owner || opts.group)
+	if (opts.owner || opts.group) {
+		if (!opts.owner)
+			pn->pstb.uid = -1;
+		if (!opts.group)
+			pn->pstb.gid = -1;
 		psync_chown(ufn, pn->pstb.uid, pn->pstb.gid, flags);
+	}
 
 	mode = S_ISDIR(pn->pstb.mode) ? 0777 : 0666;
 	if (opts.perms)

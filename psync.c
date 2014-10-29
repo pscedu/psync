@@ -207,15 +207,32 @@ enqueue_put(const char *srcfn, const char *dstfn,
 	    stb->st_blksize;
 blksz = 64 * 1024;
 
+	if (S_ISLNK(stb->st_mode)) {
+		if (!opts.links)
+			return;
+	} else if (S_ISCHR(stb->st_mode) || S_ISBLK(stb->st_mode)) {
+		if (!opts.devices)
+			return;
+	} else if (S_ISSOCK(stb->st_mode) || S_ISFIFO(stb->st_mode)) {
+		if (!opts.specials)
+			return;
+	}
+
 	/* sending; push name first */
 	wk = work_getitem(OPC_PUTNAME);
 	memcpy(&wk->wk_stb, stb, sizeof(wk->wk_stb));
 	strlcpy(wk->wk_fn, dstfn, sizeof(wk->wk_fn));
 	wk->wk_rflags = rflags;
 	if (S_ISLNK(stb->st_mode)) {
+		int rc;
+
 		wk->wk_buf = PSCALLOC(PATH_MAX);
-		if (readlink(srcfn, wk->wk_buf, PATH_MAX) == -1)
+		rc = readlink(srcfn, wk->wk_buf, PATH_MAX - 1);
+		if (rc == -1) {
 			psynclog_error("readlink %s", wk->wk_fn);
+			wk->wk_buf[0] = '\0';
+		} else
+			wk->wk_buf[rc] = '\0';
 	}
 	psynclog_diag("enqueue PUTNAME localfn=%s dstfn=%s flags=%d",
 	    srcfn, wk->wk_fn, rflags);
@@ -953,14 +970,20 @@ main(int argc, char *argv[])
 		/*
 		 * XXX add:
 		 *	--exclude filter patterns
+		 *	--block-size
+		 *	--partial
 		 */
 		st = stream_cmdopen("%s %s %s --PUPPET=%d --dstdir=%s "
-		    "%s %s %s %s -N%d",
+		    "%s%s-%s%s%s%s%s%sN%d",
 		    opts.rsh, host, opts.psync_path, opts.puppet,
 		    dstdir, i ? "" : "--HEAD",
-		    opts.perms		? "-p" : "",
-		    opts.recursive	? "-r" : "",
-		    opts.sparse		? "-S" : "",
+		    opts.devices	? "--devices " : "",
+		    opts.specials	? "--specials " : "",
+		    opts.links		? "l" : "",
+		    opts.perms		? "p" : "",
+		    opts.recursive	? "r" : "",
+		    opts.sparse		? "S" : "",
+		    opts.times		? "t" : "",
 		    opts.streams);
 		spawn_worker_threads(st);
 

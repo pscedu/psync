@@ -1,6 +1,7 @@
 /* $Id$ */
 /* %PSC_COPYRIGHT% */
 
+#include <ctype.h>
 #include <getopt.h>
 #include <stdint.h>
 

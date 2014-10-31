@@ -1,0 +1,4 @@
+- pass some kind of secret to prevent snooping/injection on the puppet
+  head socket
+- pass some kind of success message on start to verify the puppet
+  strings are all OK

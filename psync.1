@@ -1,0 +1,134 @@
+.\" $Id$
+.\" %PSC_COPYRIGHT%
+.Dd October 30, 2014
+.Dt PSYNC 1
+.ds volume PSC \- User Reference Manual
+.Os http://www.psc.edu/
+.Sh NAME
+.Nm psync
+.Nd file transfer tool
+.Sh SYNOPSIS
+.Nm psync
+.Op options
+.Ar src ... dst
+.Ek
+.Sh DESCRIPTION
+.Nm
+copies files between hosts.
+It can use multiple streams to increase throughput.
+.Pp
+The following options are available:
+.Bl -tag -width Ds
+.It Fl Fl 8-bit-output , Fl 8
+.It Fl Fl address= Ns Ar addr
+.It Fl Fl append
+.It Fl Fl archive , Fl a
+.It Fl Fl backup , Fl b
+.It Fl Fl backup-dir= Ns Ar dir
+.It Fl Fl block-size= Ns Ar sz , Fl B Ar sz
+.It Fl Fl blocking-io
+.It Fl Fl bwlimit= Ns Ar rate
+.It Fl Fl cache
+.It Fl Fl checksum , Fl c
+.It Fl Fl chmod= Ns Ar mode
+.It Fl Fl compare-dest= Ns Ar cmp
+.It Fl Fl compress , Fl z
+.It Fl Fl compress-level= Ns Ar level
+.It Fl Fl copy-dest= Ns Ar dst
+.It Fl Fl copy-dirlinks , Fl k
+.It Fl Fl copy-links , Fl L
+.It Fl Fl copy-unsafe-links
+.It Fl Fl cvs-exclude , Fl C
+.It Fl D
+.It Fl Fl del
+.It Fl Fl delay-updates
+.It Fl Fl delete
+.It Fl Fl delete-after
+.It Fl Fl delete-before
+.It Fl Fl delete-during
+.It Fl Fl delete-excluded
+.It Fl Fl devices
+.It Fl Fl dirs , Fl d
+.It Fl Fl dry-run , Fl n
+.It Fl Fl exclude-from= Ns Ar file
+.It Fl Fl exclude= Ns Ar pattern
+.It Fl Fl executability
+.It Fl Fl existing
+.It Fl Fl extended-attributes , Fl E
+.It Fl Fl files-from= Ns Ar file
+.It Fl Fl filter= Ns Ar spec , Fl f Ar spec
+.It Fl Fl force
+.It Fl Fl from0
+.It Fl Fl fuzzy , Fl y
+.It Fl Fl group , Fl g
+.It Fl Fl hard-links , Fl H
+.It Fl Fl human-readable , Fl h
+.It Fl Fl ignore-errors
+.It Fl Fl ignore-existing
+.It Fl Fl ignore-times , Fl I
+.It Fl Fl include-from= Ns Ar file
+.It Fl Fl include= Ns Ar pattern
+.It Fl Fl inplace
+.It Fl Fl ipv4 , Fl 4
+.It Fl Fl ipv6 , Fl 6
+.It Fl Fl itemize-changes , Fl i
+.It Fl Fl keep-dirlinks , Fl K
+.It Fl Fl link-dest= Ns Ar dst
+.It Fl Fl links , Fl l
+.It Fl Fl list-only
+.It Fl Fl log-file-format= Ns Ar fmt
+.It Fl Fl log-file= Ns Ar file
+.It Fl Fl max-delete= Ns Ar n
+.It Fl Fl max-size= Ns Ar n
+.It Fl Fl min-size= Ns Ar n
+.It Fl Fl modify-window= Ns Ar n
+.It Fl Fl no-implied-dirs
+.It Fl Fl numeric-ids
+.It Fl Fl omit-dir-times , Fl O
+.It Fl Fl one-file-system , Fl x
+.It Fl Fl only-write-batch= Ns Ar file
+.It Fl Fl out-format= Ns Ar fmt
+.It Fl Fl owner , Fl o
+.It Fl P
+.It Fl Fl partial
+.It Fl Fl partial-dir= Ns Ar dir
+.It Fl Fl password-file= Ns Ar file
+.It Fl Fl perms , Fl p
+.It Fl Fl port= Ns Ar n
+.It Fl Fl progress
+.It Fl Fl prune-empty-dirs , Fl m
+.It Fl Fl psync-path= Ns Ar path
+.It Fl Fl quiet , Fl q
+.It Fl Fl read-batch= Ns Ar file
+.It Fl Fl recursive , Fl r
+.It Fl Fl relative , Fl R
+.It Fl Fl remove-source-files
+.It Fl Fl rsh= Ns Ar prog , Fl e Ar prog
+.It Fl Fl safe-links
+.It Fl Fl size-only
+.It Fl Fl sockopts= Ns Ar opts
+.It Fl Fl sparse , Fl S
+.It Fl Fl specials
+.It Fl Fl stats
+.It Fl Fl streams= Ns Ar n , Fl N Ar streams
+.It Fl Fl suffix= Ns Ar suf
+.It Fl Fl super
+.It Fl Fl temp-dir= Ns Ar dir , Fl T Ar dir
+.It Fl Fl timeout= Ns Ar amt
+.It Fl Fl times , Fl t
+.It Fl Fl update , Fl u
+.It Fl Fl verbose , Fl v
+.It Fl Fl version , Fl V
+.It Fl Fl whole-file , Fl W
+.It Fl Fl write-batch= Ns Ar file
+.El
+.Sh ENVIRONMENT
+.Bl -tag -width Ev
+.El
+.Sh FILES
+.Bl -tag -width Pa
+.El
+.Sh SEE ALSO
+.Xr rsync 1 ,
+.Xr scp 1 ,
+.Xr ssh 1

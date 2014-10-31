@@ -221,7 +221,7 @@ rpc_handle_putdata(__unusedx struct stream *st, struct hdr *h,
 		f = fcache_search(pd->fid);
 	rc = pwrite(f->fd, pd->data, len, pd->off);
 	if (rc != (ssize_t)len)
-		psynclog_error("write off=%"PRId64" len=%"PRId64" "
+		psynclog_error("write off=%"PRId64" len=%zd "
 		    "rc=%zd", pd->off, len, rc);
 
 	if (rcvthr->last_f && pd->fid != rcvthr->last_f->fid)

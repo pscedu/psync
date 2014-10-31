@@ -152,13 +152,15 @@ psync_utimes(const char *fn, const struct pfl_timespec *pts, int flags)
 #else
 	struct timeval tv[2];
 
+	(void)flags;
+
 	tv[0].tv_sec = pts[0].tv_sec;
 	tv[0].tv_usec = pts[0].tv_nsec / 1000;
 
 	tv[1].tv_sec = pts[1].tv_sec;
 	tv[1].tv_usec = pts[1].tv_nsec / 1000;
 
-	if (lutimes(ufn, tv) == -1)
-		psynclog_warn("utimes %s", ufn);
+	if (lutimes(fn, tv) == -1)
+		psynclog_warn("utimes %s", fn);
 #endif
 }

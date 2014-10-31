@@ -776,7 +776,7 @@ dispthr_main(struct psc_thread *thr)
 int
 getnprocessors(void)
 {
-#ifndef SYS_sched_getaffinity	/* Linux */
+#ifdef SYS_sched_getaffinity	/* Linux */
 	cpu_set_t mask;
 
 	if (sched_getaffinity(0, sizeof(mask), &mask) == -1)

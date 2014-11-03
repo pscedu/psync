@@ -976,7 +976,7 @@ main(int argc, char *argv[])
 		st = stream_cmdopen("%s %s %s --PUPPET=%d --dstdir=%s "
 		    "%s%s%s-%s%s%s%s%sN%d",
 		    opts.rsh, host, opts.psync_path, opts.puppet,
-		    dstdir, i ? "" : "--HEAD",
+		    dstdir, i ? "" : "--HEAD ",
 		    opts.devices	? "--devices " : "",
 		    opts.specials	? "--specials " : "",
 		    opts.links		? "l" : "",

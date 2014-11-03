@@ -52,9 +52,9 @@ atomicio(int op, int fd, void *buf, size_t len)
 			break;
 		if (rc == -1) {
 			if (errno != EINTR)
-				psync_fatal("%s sz=%zd rc=%zd",
+				psync_fatal("%s sz=%zd",
 				    op == IOP_READ ? "read" : "write",
-				    rem, rc);
+				    rem);
 #define MAX_RETRY	10
 			if (++nerr > MAX_RETRY)
 				psync_fatalx("exceeded number of "

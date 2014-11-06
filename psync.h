@@ -1,13 +1,28 @@
 /* $Id$ */
-/* %PSC_COPYRIGHT% */
+/*
+ * %PSC_START_COPYRIGHT%
+ * -----------------------------------------------------------------------------
+ * Copyright (c) 2006-2014, Pittsburgh Supercomputing Center (PSC).
+ *
+ * Permission to use, copy, and modify this software and its documentation
+ * without fee for personal use or non-commercial use within your organization
+ * is hereby granted, provided that the above copyright notice is preserved in
+ * all copies and that the copyright and this permission notice appear in
+ * supporting documentation.  Permission to redistribute this software to other
+ * organizations or individuals is not permitted without the written permission
+ * of the Pittsburgh Supercomputing Center.  PSC makes no representations about
+ * the suitability of this software for any purpose.  It is provided "as is"
+ * without express or implied warranty.
+ * -----------------------------------------------------------------------------
+ * %PSC_END_COPYRIGHT%
+ */
 
 #ifndef _PSYNC_H_
 #define _PSYNC_H_
 
-#define PSYNC_VERSION "1.0"
-
 #include <signal.h>
 
+#include "pfl/completion.h"
 #include "pfl/hashtbl.h"
 #include "pfl/pthrutil.h"
 
@@ -47,8 +62,10 @@ struct filehandle {
 	void			*base;
 	int			 fd;
 	int			 refcnt;
+	uint64_t		 fid;
 	psc_spinlock_t		 lock;
 	struct psc_waitq	 wq;
+	struct psc_compl	 cmpl;
 };
 
 struct buf {
@@ -123,12 +140,15 @@ void	  psync_utimes(const char *, const struct pfl_timespec *, int);
 #define stream_send(st, opc, p, len)					\
 	stream_sendx((st), 0, (opc), (p), (len))
 
-struct stream	*stream_cmdopen(const char *, ...);
-struct stream	*stream_create(int, int);
-void		 stream_sendx(struct stream *, uint64_t, int, void *,
-		    size_t);
-void		 stream_sendxv(struct stream *, uint64_t, int,
-		    struct iovec *, int);
+struct stream *
+	 stream_cmdopen(const char *, ...);
+struct stream *
+	 stream_create(int, int);
+void	 stream_sendx(struct stream *, uint64_t, int, void *, size_t);
+void	 stream_sendxv(struct stream *, uint64_t, int, struct iovec *, int);
+
+struct filehandle *
+	 filehandle_search(uint64_t);
 
 extern struct psc_hashtbl	 fcache;
 

@@ -1,5 +1,21 @@
 /* $Id$ */
-/* %PSC_COPYRIGHT% */
+/*
+ * %PSC_START_COPYRIGHT%
+ * -----------------------------------------------------------------------------
+ * Copyright (c) 2006-2014, Pittsburgh Supercomputing Center (PSC).
+ *
+ * Permission to use, copy, and modify this software and its documentation
+ * without fee for personal use or non-commercial use within your organization
+ * is hereby granted, provided that the above copyright notice is preserved in
+ * all copies and that the copyright and this permission notice appear in
+ * supporting documentation.  Permission to redistribute this software to other
+ * organizations or individuals is not permitted without the written permission
+ * of the Pittsburgh Supercomputing Center.  PSC makes no representations about
+ * the suitability of this software for any purpose.  It is provided "as is"
+ * without express or implied warranty.
+ * -----------------------------------------------------------------------------
+ * %PSC_END_COPYRIGHT%
+ */
 
 #ifndef _RPC_H_
 #define _RPC_H_
@@ -17,8 +33,9 @@ struct hdr {
 #define OPC_CHECKZERO_REP	4
 #define OPC_GETCKSUM_REQ	5
 #define OPC_GETCKSUM_REP	6
-#define OPC_PUTNAME		7
-#define OPC_DONE		8
+#define OPC_PUTNAME_REQ		7
+#define OPC_PUTNAME_REP		8
+#define OPC_DONE		9
 
 struct rpc_sub_stat {
 	uint64_t		dev;
@@ -73,12 +90,17 @@ struct rpc_getcksum_rep {
 	char			digest[ALGLEN];
 };
 
-struct rpc_putname {
+struct rpc_putname_req {
 	struct rpc_sub_stat	pstb;
 	uint64_t		fid;
 	 int32_t		flags;
 	 int32_t		_pad;
 	char			fn[0];
+};
+
+struct rpc_putname_rep {
+	uint64_t		fid;
+	int32_t			rc;
 };
 
 #define RPC_PUTNAME_F_TRYDIR	(1 << 0)	/* try directory as base */
@@ -88,8 +110,9 @@ void rpc_send_getfile(struct stream *, uint64_t, const char *,
 	const char *);
 void rpc_send_putdata(struct stream *, uint64_t, off_t, const void *,
 	size_t);
-void rpc_send_putname(struct stream *, const char *,
+void rpc_send_putname_req(struct stream *, uint64_t, const char *,
 	const struct stat *, const char *, int);
+void rpc_send_putname_rep(struct stream *, uint64_t, int);
 
 void handle_signal(int);
 

@@ -2,7 +2,7 @@
 /*
  * %PSC_START_COPYRIGHT%
  * -----------------------------------------------------------------------------
- * Copyright (c) 2011-2013, Pittsburgh Supercomputing Center (PSC).
+ * Copyright (c) 2011-2014, Pittsburgh Supercomputing Center (PSC).
  *
  * Permission to use, copy, and modify this software and its documentation
  * without fee for personal use or non-commercial use within your organization
@@ -38,6 +38,7 @@
 #include "pfl/alloc.h"
 #include "pfl/cdefs.h"
 #include "pfl/fmt.h"
+#include "pfl/hashtbl.h"
 #include "pfl/iostats.h"
 #include "pfl/list.h"
 #include "pfl/listcache.h"
@@ -72,6 +73,7 @@ struct work {
 	size_t			  wk_len;
 	struct stat		  wk_stb;
 	uint64_t		  wk_xid;
+	uint64_t		  wk_fid;
 	off_t			  wk_off;
 };
 
@@ -90,6 +92,7 @@ struct psc_poolmgr	*buf_pool;
 
 struct psc_poolmaster	 filehandles_poolmaster;
 struct psc_poolmgr	*filehandles_pool;
+struct psc_hashtbl	 filehandles_hashtbl;
 
 struct psc_listcache	 workq;
 struct psc_poolmaster	 work_poolmaster;
@@ -111,6 +114,15 @@ psc_spinlock_t		 rcvthrs_lock = SPINLOCK_INIT;
 psc_atomic64_t		 nbytes_total = PSC_ATOMIC64_INIT(0);
 psc_atomic64_t		 nbytes_xfer = PSC_ATOMIC64_INIT(0);
 
+psc_atomic64_t		 psync_fid = PSC_ATOMIC64_INIT(0);
+
+struct filehandle *
+filehandle_search(uint64_t fid)
+{
+	return (psc_hashtbl_search(&filehandles_hashtbl, NULL, NULL,
+	    &fid));
+}
+
 void
 filehandle_dropref(struct filehandle *fh, size_t len)
 {
@@ -119,9 +131,25 @@ filehandle_dropref(struct filehandle *fh, size_t len)
 		munmap(fh->base, len);
 		psynclog_diag("close fd=%d", fh->fd);
 		close(fh->fd);
+		psc_hashent_remove(&filehandles_hashtbl, fh);
 		psc_pool_return(filehandles_pool, fh);
 	} else
 		freelock(&fh->lock);
+}
+
+struct filehandle *
+filehandle_new(uint64_t fid)
+{
+	struct filehandle *fh;
+
+	fh = psc_pool_get(filehandles_pool);
+	memset(fh, 0, sizeof(*fh));
+	INIT_SPINLOCK(&fh->lock);
+	INIT_LISTENTRY(&fh->lentry);
+	fh->refcnt++;
+	fh->fid = fid;
+	psc_hashtbl_add_item(&filehandles_hashtbl, fh);
+	return (fh);
 }
 
 void
@@ -146,19 +174,37 @@ wkrthr_main(struct psc_thread *thr)
 			    wk->wk_basefn);
 			break;
 		case OPC_PUTDATA:
+#if 0
+		if (opts.partial) {
+			psc_compl_wait(&wk->wk_fh->cmpl);
+			if (checksum) {
+				wk = work_getitem(OPC_GETCKSUM_REQ);
+				wk->wk_off = off;
+				wk->wk_len = ;
+				lc_add(&workq, wk);
+				return;
+			}
+			wk = work_getitem(OPC_GETSTAT_REQ);
+			wk->wk_off = off;
+			wk->wk_len = ;
+			lc_add(&workq, wk);
+			return;
+		}
+#endif
+
 			if (opts.sparse == 0 ||
 			    !pfl_memchk(wk->wk_fh->base + wk->wk_off, 0,
 			    wk->wk_len))
-				rpc_send_putdata(st, wk->wk_stb.st_ino,
+				rpc_send_putdata(st, wk->wk_fid,
 				    wk->wk_off, wk->wk_fh->base +
 				    wk->wk_off, wk->wk_len);
 			psc_atomic64_add(&nbytes_xfer, wk->wk_len);
 			filehandle_dropref(wk->wk_fh,
 			    wk->wk_stb.st_size);
 			break;
-		case OPC_PUTNAME:
-			rpc_send_putname(st, wk->wk_fn, &wk->wk_stb,
-			    wk->wk_buf, wk->wk_rflags);
+		case OPC_PUTNAME_REQ:
+			rpc_send_putname_req(st, wk->wk_fid, wk->wk_fn,
+			    &wk->wk_stb, wk->wk_buf, wk->wk_rflags);
 			PSCFREE(wk->wk_buf);
 			break;
 		}
@@ -191,6 +237,34 @@ work_getitem(int type)
 	return (wk);
 }
 
+struct ino_entry {
+	uint64_t		i_fid;
+	struct psc_hashentry	i_hentry;
+};
+
+struct psc_hashtbl ino_hashtbl;
+
+int
+seen_fid(ino_t fid)
+{
+	struct psc_hashbkt *b;
+	struct ino_entry *i;
+	uint64_t kfid = fid;
+	int seen = 1;
+
+	b = psc_hashbkt_get(&ino_hashtbl, &kfid);
+	i = psc_hashbkt_search(&ino_hashtbl, b, NULL, NULL, &kfid);
+	if (i == NULL) {
+		i = PSCALLOC(sizeof(*i));
+		i->i_fid = kfid;
+		psc_hashent_init(&ino_hashtbl, i);
+		psc_hashbkt_add_item(&ino_hashtbl, b, i);
+		seen = 0;
+	}
+	psc_hashbkt_put(&ino_hashtbl, b);
+	return (seen);
+}
+
 /*
  * @stb: stat(2) buffer only used during PUTs.
  */
@@ -201,6 +275,7 @@ enqueue_put(const char *srcfn, const char *dstfn,
 	struct filehandle *fh;
 	struct work *wk;
 	off_t off = 0;
+	uint64_t fid;
 	size_t blksz;
 
 	blksz = opts.block_size ? (blksize_t)opts.block_size :
@@ -218,8 +293,14 @@ blksz = 64 * 1024;
 			return;
 	}
 
+	if (opts.links)
+		fid = stb->st_ino;
+	else
+		fid = psc_atomic64_inc_getnew(&psync_fid);
+
 	/* sending; push name first */
-	wk = work_getitem(OPC_PUTNAME);
+	wk = work_getitem(OPC_PUTNAME_REQ);
+	wk->wk_fid = fid;
 	memcpy(&wk->wk_stb, stb, sizeof(wk->wk_stb));
 	strlcpy(wk->wk_fn, dstfn, sizeof(wk->wk_fn));
 	wk->wk_rflags = rflags;
@@ -234,18 +315,21 @@ blksz = 64 * 1024;
 		} else
 			wk->wk_buf[rc] = '\0';
 	}
-	psynclog_diag("enqueue PUTNAME localfn=%s dstfn=%s flags=%d",
+	psynclog_diag("enqueue PUTNAME_REQ localfn=%s dstfn=%s flags=%d",
 	    srcfn, wk->wk_fn, rflags);
-	lc_add(&workq, wk);
 
-	if (!S_ISREG(stb->st_mode))
+	if (!S_ISREG(stb->st_mode) ||
+	    (opts.links && seen_fid(fid))) {
+		lc_add(&workq, wk);
 		return;
+	}
 
-	fh = psc_pool_get(filehandles_pool);
-	memset(fh, 0, sizeof(*fh));
-	INIT_SPINLOCK(&fh->lock);
-	INIT_LISTENTRY(&fh->lentry);
-	fh->refcnt++;
+	fh = filehandle_new(fid);
+
+	if (opts.partial)
+		psc_compl_init(&fh->cmpl);
+
+	lc_add(&workq, wk);
 
 	fh->fd = open(srcfn, O_RDONLY);
 	if (fh->fd == -1)
@@ -258,27 +342,10 @@ blksz = 64 * 1024;
 
 	/* push data chunks */
 	for (; off < stb->st_size; off += blksz) {
-#if 0
-		if (opts.partial) {
-			if (checksum) {
-				wk = work_getitem(OPC_GETCKSUM_REQ);
-				wk->wk_off = off;
-				wk->wk_len = ;
-				lc_add(&workq, wk);
-				return;
-			}
-			wk = work_getitem(OPC_GETSTAT_REQ);
-			wk->wk_off = off;
-			wk->wk_len = ;
-			lc_add(&workq, wk);
-			return;
-		}
-#endif
-
 		wk = work_getitem(OPC_PUTDATA);
 		wk->wk_fh = fh;
 
-		wk->wk_stb.st_ino = stb->st_ino;
+		wk->wk_fid = fid;
 		wk->wk_stb.st_size = stb->st_size;
 
 		spinlock(&fh->lock);
@@ -971,13 +1038,13 @@ main(int argc, char *argv[])
 		 * XXX add:
 		 *	--exclude filter patterns
 		 *	--block-size
-		 *	--partial
 		 */
 		st = stream_cmdopen("%s %s %s --PUPPET=%d --dstdir=%s "
 		    "%s%s%s-%s%s%s%s%sN%d",
 		    opts.rsh, host, opts.psync_path, opts.puppet,
 		    dstdir, i ? "" : "--HEAD ",
 		    opts.devices	? "--devices " : "",
+		    opts.partial	? "--partial " : "",
 		    opts.specials	? "--specials " : "",
 		    opts.links		? "l" : "",
 		    opts.perms		? "p" : "",

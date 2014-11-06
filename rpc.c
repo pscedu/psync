@@ -1,5 +1,21 @@
 /* $Id$ */
-/* %PSC_COPYRIGHT% */
+/*
+ * %PSC_START_COPYRIGHT%
+ * -----------------------------------------------------------------------------
+ * Copyright (c) 2011-2014, Pittsburgh Supercomputing Center (PSC).
+ *
+ * Permission to use, copy, and modify this software and its documentation
+ * without fee for personal use or non-commercial use within your organization
+ * is hereby granted, provided that the above copyright notice is preserved in
+ * all copies and that the copyright and this permission notice appear in
+ * supporting documentation.  Permission to redistribute this software to other
+ * organizations or individuals is not permitted without the written permission
+ * of the Pittsburgh Supercomputing Center.  PSC makes no representations about
+ * the suitability of this software for any purpose.  It is provided "as is"
+ * without express or implied warranty.
+ * -----------------------------------------------------------------------------
+ * %PSC_END_COPYRIGHT%
+ */
 
 #include <sys/param.h>
 #include <sys/stat.h>
@@ -98,16 +114,16 @@ rpc_send_putdata(struct stream *st, uint64_t fid, off_t off,
 }
 
 void
-rpc_send_putname(struct stream *st, const char *fn,
+rpc_send_putname_req(struct stream *st, uint64_t fid, const char *fn,
     const struct stat *stb, const char *buf, int rflags)
 {
-	struct rpc_putname pn;
+	struct rpc_putname_req pn;
 	struct iovec iov[3];
 	int nio = 0;
 
 	memset(&pn, 0, sizeof(pn));
 	pn.flags = rflags;
-	pn.fid = stb->st_ino;
+	pn.fid = fid;
 	pn.pstb.dev = stb->st_dev;
 	pn.pstb.rdev = stb->st_rdev;
 	pn.pstb.mode = stb->st_mode;
@@ -133,7 +149,22 @@ rpc_send_putname(struct stream *st, const char *fn,
 		nio++;
 	}
 
-	stream_sendv(st, OPC_PUTNAME, iov, nio);
+	stream_sendv(st, OPC_PUTNAME_REQ, iov, nio);
+}
+
+void
+rpc_send_putname_rep(struct stream *st, uint64_t fid, int rc)
+{
+	struct rpc_putname_rep pnp;
+	struct iovec iov;
+
+	pnp.fid = fid;
+	pnp.rc = rc;
+
+	iov.iov_base = &pnp;
+	iov.iov_len = sizeof(pnp);
+
+	stream_sendv(st, OPC_PUTNAME_REP, &iov, 1);
 }
 
 void
@@ -365,16 +396,16 @@ userfn_subst(const char *fn)
 }
 
 void
-rpc_handle_putname(__unusedx struct stream *st, struct hdr *h, void *buf)
+rpc_handle_putname_req(struct stream *st, struct hdr *h, void *buf)
 {
-	int fd = -1, flags = 0;
 	char *sep, *ufn, objfn[PATH_MAX];
-	struct rpc_putname *pn = buf;
+	struct rpc_putname_req *pn = buf;
+	int rc = 0, fd = -1, flags = 0;
 	mode_t mode;
 
 	/* apply incoming name substitutions */
 	ufn = userfn_subst(pn->fn);
-	psynclog_diag("handle PUTNAME xid=%#"PRIx64" %s -> %s "
+	psynclog_diag("handle PUTNAME_REQ xid=%#"PRIx64" %s -> %s "
 	    "mode=%0o flags=%d",
 	    h->xid, pn->fn, ufn, pn->pstb.mode, pn->flags);
 
@@ -444,15 +475,34 @@ rpc_handle_putname(__unusedx struct stream *st, struct hdr *h, void *buf)
 		close(fd);
 		fd = -1;
 	} else if (S_ISREG(pn->pstb.mode)) {
+		struct stat dummy;
 		int ntries = 0;
 
 		objns_makepath(objfn, pn->fid);
 
-		fd = open(objfn, O_CREAT | O_RDWR, 0600);
+		if (opts.partial && stat(ufn, &dummy) == 0) {
+			/*
+			 * It is OK to do this without worrying about
+			 * racing because the master waits for our
+			 * response to this RPC before sending file data
+			 * when in --partial mode.
+			 */
+			if (link(ufn, objfn) == -1) {
+				psynclog_warn("open %s", ufn);
+				goto out;
+			}
+			fd = open(objfn, O_RDWR);
+		} else
+			fd = open(objfn, O_CREAT | O_RDWR, 0600);
 		if (fd == -1) {
+			rc = errno;
 			psynclog_warn("open %s", ufn);
-			return;
+			goto out;
 		}
+
+		if (!opts.partial)
+			unlink(ufn);
+
  retry:
 		if (link(objfn, ufn) == -1) {
 			/*
@@ -468,9 +518,10 @@ rpc_handle_putname(__unusedx struct stream *st, struct hdr *h, void *buf)
 				usleep(1000);
 				goto retry;
 			}
+			rc = errno;
 			close(fd);
 			psynclog_warn("link %s -> %s", ufn, objfn);
-			return;
+			goto out;
 		}
 	} else {
 		psynclog_warn("invalid mode %#o", pn->pstb.mode);
@@ -502,6 +553,22 @@ rpc_handle_putname(__unusedx struct stream *st, struct hdr *h, void *buf)
 
 	if (fd != -1)
 		close(fd);
+
+ out:
+	if (opts.partial)
+		rpc_send_putname_rep(st, pn->fid, rc);
+}
+
+void
+rpc_handle_putname_rep(__unusedx struct stream *st,
+    __unusedx struct hdr *h, void *buf)
+{
+	struct rpc_putname_rep *pnp = buf;
+	struct filehandle *fh;
+
+	fh = filehandle_search(pnp->fid);
+	if (fh)
+		psc_compl_ready(&fh->cmpl, pnp->rc);
 }
 
 void
@@ -522,7 +589,8 @@ op_handler_t ops[] = {
 	rpc_handle_checkzero_rep,
 	rpc_handle_getcksum_req,
 	rpc_handle_getcksum_rep,
-	rpc_handle_putname,
+	rpc_handle_putname_req,
+	rpc_handle_putname_rep,
 	rpc_handle_done
 };
 

@@ -79,6 +79,11 @@ struct work {
 	off_t			  wk_off;
 };
 
+struct ino_entry {
+	uint64_t		  i_fid;
+	struct psc_hashentry	  i_hentry;
+};
+
 enum {
 	THRT_DISP,
 	THRT_MAIN,
@@ -99,6 +104,8 @@ struct psc_hashtbl	 filehandles_hashtbl;
 struct psc_listcache	 workq;
 struct psc_poolmaster	 work_poolmaster;
 struct psc_poolmgr	*work_pool;
+
+struct psc_hashtbl	 ino_hashtbl;
 
 struct psc_iostats	 iostats;
 
@@ -150,6 +157,7 @@ filehandle_new(uint64_t fid)
 	INIT_LISTENTRY(&fh->lentry);
 	fh->refcnt++;
 	fh->fid = fid;
+	psc_hashent_init(&filehandles_hashtbl, fh);
 	psc_hashtbl_add_item(&filehandles_hashtbl, fh);
 	return (fh);
 }
@@ -160,10 +168,6 @@ wkrthr_main(struct psc_thread *thr)
 	struct wkrthr *wkrthr = thr->pscthr_private;
 	struct stream *st = wkrthr->st;
 	struct work *wk;
-
-	spinlock(&wkrthrs_lock);
-	push(&wkrthrs, thr);
-	freelock(&wkrthrs_lock);
 
 	while (pscthr_run(thr)) {
 		wk = lc_getwait(&workq);
@@ -238,13 +242,6 @@ work_getitem(int type)
 	wk->wk_type = type;
 	return (wk);
 }
-
-struct ino_entry {
-	uint64_t		i_fid;
-	struct psc_hashentry	i_hentry;
-};
-
-struct psc_hashtbl ino_hashtbl;
 
 int
 seen_fid(ino_t fid)
@@ -651,17 +648,25 @@ spawn_worker_threads(struct stream *st)
 
 	n = psc_dynarray_len(&streams);
 
-	thr = pscthr_init(THRT_WKR, 0, wkrthr_main, NULL,
-	    sizeof(*wkrthr), "wkrthr%d", n);
+	thr = pscthr_init(THRT_WKR, wkrthr_main, NULL, sizeof(*wkrthr),
+	    "wkrthr%d", n);
 	wkrthr = thr->pscthr_private;
 	wkrthr->st = st;
 	pscthr_setready(thr);
 
-	thr = pscthr_init(THRT_RCV, 0, rcvthr_main, NULL,
-	    sizeof(*rcvthr), "rcvthr%d", n);
+	spinlock(&wkrthrs_lock);
+	push(&wkrthrs, thr);
+	freelock(&wkrthrs_lock); 
+
+	thr = pscthr_init(THRT_RCV, rcvthr_main, NULL, sizeof(*rcvthr),
+	    "rcvthr%d", n);
 	rcvthr = thr->pscthr_private;
 	rcvthr->st = st;
 	pscthr_setready(thr);
+
+	spinlock(&rcvthrs_lock);
+	push(&rcvthrs, thr);
+	freelock(&rcvthrs_lock); 
 }
 
 int
@@ -919,6 +924,10 @@ main(int argc, char *argv[])
 #if 0
 	setenv("PSC_LOG_FORMAT", "%n: ", 0);
 	setenv("PSC_LOG_LEVEL", "warn", 0);
+
+	if (getenv("PSC_DUMPSTACK") == NULL)
+		setenv("PSC_LOG_LEVEL", "diag", 0);
+	setenv("PSC_DUMPSTACK", "1", 0);
 #endif
 
 	pfl_init();
@@ -931,7 +940,7 @@ main(int argc, char *argv[])
 	psync_umask = umask(0);
 	umask(psync_umask);
 
-	pscthr_init(THRT_MAIN, 0, NULL, NULL, 0, "mainthr");
+	pscthr_init(THRT_MAIN, NULL, NULL, 0, "mainthr");
 
 	psc_poolmaster_init(&buf_poolmaster, struct buf, lentry,
 	    PPMF_AUTO, 16, 16, 0, NULL, NULL, NULL, "buf");
@@ -944,6 +953,12 @@ main(int argc, char *argv[])
 	psc_poolmaster_init(&filehandles_poolmaster, struct filehandle,
 	    lentry, PPMF_AUTO, 16, 16, 512, NULL, NULL, NULL, "fh");
 	filehandles_pool = psc_poolmaster_getmgr(&filehandles_poolmaster);
+
+	psc_hashtbl_init(&filehandles_hashtbl, 0, struct filehandle,
+	    fid, hentry, 1531, NULL, "filehandles");
+
+	psc_hashtbl_init(&ino_hashtbl, 0, struct ino_entry, i_fid,
+	    i_hentry, 1531, NULL, "ino");
 
 	fcache_init();
 
@@ -1042,7 +1057,7 @@ main(int argc, char *argv[])
 		 *	--block-size
 		 */
 		st = stream_cmdopen("%s %s %s --PUPPET=%d --dstdir=%s "
-		    "%s%s%s-%s%s%s%s%sN%d",
+		    "%s%s%s%s-%s%s%s%s%sN%d",
 		    opts.rsh, host, opts.psync_path, opts.puppet,
 		    dstdir, i ? "" : "--HEAD ",
 		    opts.devices	? "--devices " : "",
@@ -1068,7 +1083,7 @@ main(int argc, char *argv[])
 	signal(SIGINT, handle_signal);
 	signal(SIGPIPE, handle_signal);
 
-	dispthr = pscthr_init(THRT_DISP, 0, dispthr_main, NULL, 0,
+	dispthr = pscthr_init(THRT_DISP, dispthr_main, NULL, 0,
 	    "dispthr");
 
 	rflags = 0;

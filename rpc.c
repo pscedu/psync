@@ -612,10 +612,6 @@ rcvthr_main(struct psc_thread *thr)
 	struct hdr hdr;
 	ssize_t rc;
 
-	spinlock(&rcvthrs_lock);
-	push(&rcvthrs, thr);
-	freelock(&rcvthrs_lock);
-
 	rcvthr = thr->pscthr_private;
 	st = rcvthr->st;
 	while (pscthr_run(thr)) {

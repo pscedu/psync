@@ -61,6 +61,7 @@ struct rcvthr {
 
 struct filehandle {
 	struct psc_listentry	 lentry;
+	struct psc_hashentry	 hentry;
 	void			*base;
 	int			 fd;
 	int			 refcnt;

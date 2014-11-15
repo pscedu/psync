@@ -26,6 +26,7 @@
 #include <sys/param.h>
 #include <sys/stat.h>
 #include <sys/sysctl.h>
+#include <sys/syscall.h>
 #include <sys/un.h>
 
 #include <ctype.h>
@@ -128,6 +129,9 @@ psc_atomic64_t		 nbytes_total = PSC_ATOMIC64_INIT(0);
 psc_atomic64_t		 nbytes_xfer = PSC_ATOMIC64_INIT(0);
 
 psc_atomic64_t		 psync_fid = PSC_ATOMIC64_INIT(0);
+
+struct psc_compl	 psync_ready = PSC_COMPL_INIT;
+
 
 struct filehandle *
 filehandle_search(uint64_t fid)
@@ -660,7 +664,7 @@ spawn_worker_threads(struct stream *st)
 
 	spinlock(&wkrthrs_lock);
 	push(&wkrthrs, thr);
-	freelock(&wkrthrs_lock); 
+	freelock(&wkrthrs_lock);
 
 	thr = pscthr_init(THRT_RCV, rcvthr_main, NULL, sizeof(*rcvthr),
 	    "rcvthr%d", n);
@@ -670,7 +674,7 @@ spawn_worker_threads(struct stream *st)
 
 	spinlock(&rcvthrs_lock);
 	push(&rcvthrs, thr);
-	freelock(&rcvthrs_lock); 
+	freelock(&rcvthrs_lock);
 }
 
 int
@@ -731,6 +735,7 @@ puppet_head_mode(void)
 	signal(SIGPIPE, handle_signal);
 
 	st = stream_create(STDIN_FILENO, STDOUT_FILENO);
+	rpc_send_ready(st);
 	spawn_worker_threads(st);
 
 	psynclog_diag("waiting for %d puppet strings", opts.streams);
@@ -854,13 +859,15 @@ dispthr_main(struct psc_thread *thr)
 int
 getnprocessors(void)
 {
+	int np = 1;
+
 #ifdef SYS_sched_getaffinity	/* Linux */
 	cpu_set_t mask;
 
 	if (sched_getaffinity(0, sizeof(mask), &mask) == -1)
 		psynclog_warn("sched_getaffinity");
 	else
-		return (CPU_COUNT(&mask));
+		np = CPU_COUNT(&mask);
 
 #elif defined(HW_LOGICALCPU)	/* MacOS X */
 	int mib[2];
@@ -871,8 +878,8 @@ getnprocessors(void)
 	size = sizeof(np);
 	mib[0] = CTL_HW;
 	mib[1] = HW_LOGICALCPU;
-	if (sysctl(mib, 2, &np, &size, NULL, 0) == -1)
-		return (-1);
+	if (sysctl(mib, 2, &np, &size, NULL, 0) == 0)
+		np = size;
 
 #elif defined(HW_NCPU)		/* BSD */
 	int np, mib[2];
@@ -881,21 +888,19 @@ getnprocessors(void)
 	size = sizeof(np);
 	mib[0] = CTL_HW;
 	mib[1] = HW_NCPU;
-	if (sysctl(mib, 2, &np, &size, NULL, 0) == -1)
-		return (-1);
+	if (sysctl(mib, 2, &np, &size, NULL, 0) == 0)
+		np = size;
 
 #endif
-	return (1);
+	return (np);
 }
 
 /* XXX not dynamic adjusting but better than nothing */
-/* when copying to local machine, make sure to cut estimate by half */
+/* when copying local-to-local, make sure to cut estimate by half */
 int
 getnstreams(int want)
 {
-	int np;
-
-	np = getnprocessors();
+	int nstr = want;
 
 #ifndef HAVE_GETLOADAVG
 	{
@@ -903,12 +908,12 @@ getnstreams(int want)
 
 		if (getloadavg(&avg, 1) == -1)
 			psynclog_warn("getloadavg");
+		// XXX round up
 
-		want = MAX(np - avg, 1);
-		want = MIN(want, MAX_STREAMS);
+		nstr = MAX(1, nstr - avg);
 	}
 #endif
-	return (MIN(want, np));
+	return (MIN(nstr, MAX_STREAMS));
 }
 
 __dead void
@@ -922,8 +927,9 @@ int
 main(int argc, char *argv[])
 {
 	char *p, *fn, *host, *dstfn, *dstdir;
-	int mode, travflags, rflags, i, rv, rc = 0;
+	int mode, travflags, rflags, i, rv, rc;
 	struct psc_thread *dispthr;
+	struct stream *st;
 
 #if 0
 	setenv("PSC_LOG_FORMAT", "%n: ", 0);
@@ -1048,34 +1054,37 @@ main(int argc, char *argv[])
 		opts.puppet = psc_random32u(1000000);
 	while (!opts.puppet);
 
-	for (i = 0; i < opts.streams; i++) {
-		struct stream *st;
+	/*
+	 * XXX add:
+	 *	--exclude filter patterns
+	 *	--block-size
+	 */
+	st = stream_cmdopen("%s %s %s --PUPPET=%d --dstdir=%s --HEAD "
+	    "%s%s%s-%s%s%s%s%sN%d",
+	    opts.rsh, host, opts.psync_path, opts.puppet, dstdir,
+	    opts.devices	? "--devices " : "",
+	    opts.partial	? "--partial " : "",
+	    opts.specials	? "--specials " : "",
+	    opts.links		? "l" : "",
+	    opts.perms		? "p" : "",
+	    opts.recursive	? "r" : "",
+	    opts.sparse		? "S" : "",
+	    opts.times		? "t" : "",
+	    opts.streams);
+	spawn_worker_threads(st);
 
-		/* spawning multiple ssh too quickly fails */
-		if (i)
-			usleep(30000);
+	if (psc_compl_wait(&psync_ready) == -1)
+		errx(1, "remote process failed to start\n\ncheck:\n"
+		    "- psync is installed on remote host (ssh host psync -V)\n"
+		    "- passwordless SSH is setup such as pubkeys or GSSAPI (e.g. kinit)");
 
-		/*
-		 * XXX add:
-		 *	--exclude filter patterns
-		 *	--block-size
-		 */
-		st = stream_cmdopen("%s %s %s --PUPPET=%d --dstdir=%s "
-		    "%s%s%s%s-%s%s%s%s%sN%d",
-		    opts.rsh, host, opts.psync_path, opts.puppet,
-		    dstdir, i ? "" : "--HEAD ",
-		    opts.devices	? "--devices " : "",
-		    opts.partial	? "--partial " : "",
-		    opts.specials	? "--specials " : "",
-		    opts.links		? "l" : "",
-		    opts.perms		? "p" : "",
-		    opts.recursive	? "r" : "",
-		    opts.sparse		? "S" : "",
-		    opts.times		? "t" : "",
-		    opts.streams);
+	for (i = 1; i < opts.streams; i++) {
+		/* spawning multiple ssh processes too quickly fails */
+		usleep(30000);
+
+		st = stream_cmdopen("%s %s %s --PUPPET=%d",
+		    opts.rsh, host, opts.psync_path, opts.puppet);
 		spawn_worker_threads(st);
-
-		// XXX send nstreams request
 	}
 
 	travflags = PFL_FILEWALKF_RELPATH;
@@ -1093,6 +1102,7 @@ main(int argc, char *argv[])
 	rflags = 0;
 	if (argc == 1)
 		rflags |= RPC_PUTNAME_F_TRYDIR;
+	rc = 0;
 	for (i = 0; i < argc; i++) {
 		rv = walkfiles(mode, argv[i], travflags, rflags, dstfn);
 		if (rv)

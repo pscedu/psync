@@ -36,7 +36,7 @@ struct stat;
 
 struct psc_thread;
 
-#define MAX_STREAMS	64
+#define MAX_STREAMS		64
 
 struct stream {
 	int			 rfd;
@@ -131,6 +131,8 @@ void	  fcache_init(void);
 void	  fcache_destroy(void);
 
 int	  getnstreams(int);
+int	  getnprocessors(void);
+
 __dead void
 	  usage(void);
 
@@ -165,8 +167,10 @@ extern int			 objns_depth;
 extern volatile sig_atomic_t	 exit_from_signal;
 
 extern int			 psync_is_master;
-psc_atomic64_t			 psync_xid;
+extern psc_atomic64_t		 psync_xid;
 extern mode_t			 psync_umask;
+
+extern struct psc_compl		 psync_ready;
 
 extern struct psc_dynarray	 streams;
 

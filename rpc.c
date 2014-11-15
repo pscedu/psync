@@ -162,25 +162,26 @@ void
 rpc_send_putname_rep(struct stream *st, uint64_t fid, int rc)
 {
 	struct rpc_putname_rep pnp;
-	struct iovec iov;
 
 	pnp.fid = fid;
 	pnp.rc = rc;
-
-	iov.iov_base = &pnp;
-	iov.iov_len = sizeof(pnp);
-
-	stream_sendv(st, OPC_PUTNAME_REP, &iov, 1);
+	stream_send(st, OPC_PUTNAME_REP, &pnp, sizeof(pnp));
 }
 
 void
 rpc_send_done(struct stream *st)
 {
-	struct iovec iov;
+	stream_send(st, OPC_DONE, NULL, 0);
+}
 
-	iov.iov_len = 0;
+void
+rpc_send_ready(struct stream *st)
+{
+	struct rpc_ready r;
 
-	stream_sendv(st, OPC_DONE, &iov, 1);
+	r.nstreams = opts.streams = getnstreams(
+	    MIN(getnprocessors(), opts.streams));
+	stream_send(st, OPC_READY, &r, sizeof(r));
 }
 
 #define LASTFIELDLEN(h, type) ((h)->msglen - sizeof(type))
@@ -585,6 +586,19 @@ rpc_handle_done(struct stream *st, __unusedx struct hdr *h,
 	st->done = 1;
 }
 
+void
+rpc_handle_ready(__unusedx struct stream *st, __unusedx struct hdr *h,
+    void *buf)
+{
+	struct rpc_ready *r = buf;
+
+	psynclog_diag("handle READY");
+	if (r->nstreams > 0 &&
+	    r->nstreams < opts.streams)
+		opts.streams = r->nstreams;
+	psc_compl_ready(&psync_ready, 1);
+}
+
 typedef void (*op_handler_t)(struct stream *, struct hdr *, void *);
 
 op_handler_t ops[] = {
@@ -597,7 +611,8 @@ op_handler_t ops[] = {
 	rpc_handle_getcksum_rep,
 	rpc_handle_putname_req,
 	rpc_handle_putname_rep,
-	rpc_handle_done
+	rpc_handle_done,
+	rpc_handle_ready
 };
 
 void
@@ -652,4 +667,6 @@ rcvthr_main(struct psc_thread *thr)
 	spinlock(&rcvthrs_lock);
 	psc_dynarray_removeitem(&rcvthrs, thr);
 	freelock(&rcvthrs_lock);
+	
+	psc_compl_ready(&psync_ready, -1);
 }

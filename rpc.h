@@ -32,16 +32,17 @@ struct hdr {
 	uint64_t		xid;	/* message ID */
 };
 
-#define OPC_GETFILE_REQ		0
-#define OPC_GETFILE_REP		1
-#define OPC_PUTDATA		2
-#define OPC_CHECKZERO_REQ	3
-#define OPC_CHECKZERO_REP	4
-#define OPC_GETCKSUM_REQ	5
-#define OPC_GETCKSUM_REP	6
-#define OPC_PUTNAME_REQ		7
-#define OPC_PUTNAME_REP		8
-#define OPC_DONE		9
+#define OPC_GETFILE_REQ		 0
+#define OPC_GETFILE_REP		 1
+#define OPC_PUTDATA		 2
+#define OPC_CHECKZERO_REQ	 3
+#define OPC_CHECKZERO_REP	 4
+#define OPC_GETCKSUM_REQ	 5
+#define OPC_GETCKSUM_REP	 6
+#define OPC_PUTNAME_REQ		 7
+#define OPC_PUTNAME_REP		 8
+#define OPC_DONE		 9
+#define OPC_READY		10
 
 struct rpc_sub_stat {
 	uint64_t		dev;
@@ -111,7 +112,12 @@ struct rpc_putname_rep {
 
 #define RPC_PUTNAME_F_TRYDIR	(1 << 0)	/* try directory as base */
 
+struct rpc_ready {
+	int32_t			nstreams;
+};
+
 void rpc_send_done(struct stream *);
+void rpc_send_ready(struct stream *);
 void rpc_send_getfile(struct stream *, uint64_t, const char *,
 	const char *);
 void rpc_send_putdata(struct stream *, uint64_t, off_t, const void *,

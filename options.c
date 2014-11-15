@@ -252,8 +252,11 @@ parseopts(int argc, char **argv)
 	psc_dynarray_init(&opts.include);
 	opts.progress = 1;
 	opts.psync_path = "psync";
-	opts.rsh = "ssh -oControlPath=none -oKbdInteractiveAuthentication=no";
-	opts.streams = getnstreams(MAX_STREAMS);
+	opts.rsh = "ssh "
+	    "-oControlPath=none "
+	    "-oKbdInteractiveAuthentication=no "
+	    "-oNumberOfPasswordPrompts=1";
+	opts.streams = getnstreams(getnprocessors());
 
 	while ((c = getopt_long(argc, argv,
 	    "0468aB:bCcDdEEe:f:gHhIiKkLlmN:nOoPpqRrST:tuVvWxyz", longopts,

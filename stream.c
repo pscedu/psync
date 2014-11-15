@@ -133,6 +133,9 @@ stream_cmdopen(const char *fmt, ...)
 			err(1, "dup2");
 		if (dup2(rfd[1], 1) == -1)
 			err(1, "dup2");
+
+		setsid();
+
 		execvp(cmdv[0], cmdv);
 		err(1, "exec %s", cmd);
 	default:

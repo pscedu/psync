@@ -132,6 +132,7 @@ psc_atomic64_t		 psync_fid = PSC_ATOMIC64_INIT(0);
 
 struct psc_compl	 psync_ready = PSC_COMPL_INIT;
 
+unsigned char		 psync_authbuf[AUTH_LEN];
 
 struct filehandle *
 filehandle_search(uint64_t fid)
@@ -604,6 +605,19 @@ recv_fd(int s)
 }
 
 int
+recv_auth(int fd, unsigned char *p)
+{
+	return (atomicio_read(fd, p, AUTH_LEN) == AUTH_LEN);
+}
+
+void
+send_auth(int fd, unsigned char *buf)
+{
+	if (atomicio_write(fd, buf, AUTH_LEN) != AUTH_LEN)
+		psc_fatalx("short I/O");
+}
+
+int
 puppet_limb_mode(void)
 {
 	struct sockaddr_un sun;
@@ -636,6 +650,10 @@ puppet_limb_mode(void)
 		break;
 	}
 
+	if (!recv_auth(STDIN_FILENO, psync_authbuf))
+		psync_fatal("no auth received");
+
+	send_auth(s, psync_authbuf);
 	send_fd(s, 0);
 	send_fd(s, 1);
 
@@ -680,6 +698,7 @@ spawn_worker_threads(struct stream *st)
 int
 puppet_head_mode(void)
 {
+	unsigned char tbuf[AUTH_LEN];
 	int i, rc, clifd, s, rfd, wfd;
 	struct psc_dynarray puppet_strings = DYNARRAY_INIT;
 	struct sockaddr_un sun;
@@ -734,6 +753,9 @@ puppet_head_mode(void)
 	signal(SIGINT, handle_signal);
 	signal(SIGPIPE, handle_signal);
 
+	if (!recv_auth(STDIN_FILENO, psync_authbuf))
+		psync_fatal("no auth received");
+
 	st = stream_create(STDIN_FILENO, STDOUT_FILENO);
 	rpc_send_ready(st);
 	spawn_worker_threads(st);
@@ -741,6 +763,12 @@ puppet_head_mode(void)
 	psynclog_diag("waiting for %d puppet strings", opts.streams);
 	for (i = 1; i < opts.streams; i++) {
 		clifd = accept(s, NULL, NULL);
+		if (!recv_auth(clifd, tbuf) ||
+		    memcmp(psync_authbuf, tbuf, AUTH_LEN)) {
+			close(clifd);
+			i--;
+			continue;
+		}
 		rfd = recv_fd(clifd);
 		wfd = recv_fd(clifd);
 		st = stream_create(rfd, wfd);
@@ -872,7 +900,7 @@ getnprocessors(void)
 #elif defined(HW_LOGICALCPU)	/* MacOS X */
 	int mib[2];
 
-	int np, mib[2];
+	int mib[2];
 	size_t size;
 
 	size = sizeof(np);
@@ -882,7 +910,7 @@ getnprocessors(void)
 		np = size;
 
 #elif defined(HW_NCPU)		/* BSD */
-	int np, mib[2];
+	int mib[2];
 	size_t size;
 
 	size = sizeof(np);
@@ -1054,6 +1082,8 @@ main(int argc, char *argv[])
 		opts.puppet = psc_random32u(1000000);
 	while (!opts.puppet);
 
+	pfl_random_getbytes(psync_authbuf, sizeof(psync_authbuf));
+
 	/*
 	 * XXX add:
 	 *	--exclude filter patterns
@@ -1071,6 +1101,7 @@ main(int argc, char *argv[])
 	    opts.sparse		? "S" : "",
 	    opts.times		? "t" : "",
 	    opts.streams);
+	send_auth(st->wfd, psync_authbuf);
 	spawn_worker_threads(st);
 
 	if (psc_compl_wait(&psync_ready) == -1)
@@ -1084,6 +1115,7 @@ main(int argc, char *argv[])
 
 		st = stream_cmdopen("%s %s %s --PUPPET=%d",
 		    opts.rsh, host, opts.psync_path, opts.puppet);
+		send_auth(st->wfd, psync_authbuf);
 		spawn_worker_threads(st);
 	}
 

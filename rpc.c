@@ -667,6 +667,6 @@ rcvthr_main(struct psc_thread *thr)
 	spinlock(&rcvthrs_lock);
 	psc_dynarray_removeitem(&rcvthrs, thr);
 	freelock(&rcvthrs_lock);
-	
+
 	psc_compl_ready(&psync_ready, -1);
 }

@@ -116,6 +116,8 @@ struct rpc_ready {
 	int32_t			nstreams;
 };
 
+#define AUTH_LEN		1024
+
 void rpc_send_done(struct stream *);
 void rpc_send_ready(struct stream *);
 void rpc_send_getfile(struct stream *, uint64_t, const char *,

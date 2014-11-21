@@ -4,6 +4,7 @@ ROOTDIR=..
 include ${ROOTDIR}/Makefile.path
 
 PROG=		psync
+MAN+=		psync.1
 SRCS+=		io.c
 SRCS+=		options.c
 SRCS+=		psync.c

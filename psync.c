@@ -884,6 +884,20 @@ dispthr_main(struct psc_thread *thr)
 	    (int)(d.tv_nsec / 10000000), totalbuf, ratebuf, ce_seq);
 }
 
+#if defined(SYS_sched_getaffinity) && !defined(CPU_COUNT)
+#  define CPU_COUNT(set) _cpu_count(set)
+int
+_cpu_count(cpu_set_t *set)
+{
+	int i, n = 0;
+
+	for (i = 0; i < sizeof(*set) / sizeof(__cpu_mask); i++)
+		if (CPU_ISSET(i, set))
+			n++;
+	return (n);
+}
+#endif
+
 int
 getnprocessors(void)
 {

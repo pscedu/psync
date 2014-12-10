@@ -32,6 +32,7 @@
 #include "pfl/hashtbl.h"
 #include "pfl/pthrutil.h"
 
+struct iovec;
 struct stat;
 
 struct psc_thread;

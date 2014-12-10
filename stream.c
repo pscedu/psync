@@ -27,6 +27,9 @@
  * The streams API communicates the psync protocol over sockets.
  */
 
+#include <sys/types.h>
+#include <sys/uio.h>
+
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>

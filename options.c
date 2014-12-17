@@ -254,6 +254,7 @@ parseopts(int argc, char **argv)
 	opts.psync_path = "psync";
 	opts.rsh = "ssh "
 	    "-oControlPath=none "
+	    "-oCompression=off "
 	    "-oKbdInteractiveAuthentication=no "
 	    "-oNumberOfPasswordPrompts=1";
 	opts.streams = getnstreams(getnprocessors());

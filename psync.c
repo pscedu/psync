@@ -74,7 +74,7 @@ struct work {
 	char			  wk_basefn[NAME_MAX + 1];
 	struct filehandle	 *wk_fh;
 	char			 *wk_buf;
-	char			  wk_host[HOST_NAME_MAX + 1];
+	char			  wk_host[PFL_HOSTNAME_MAX];
 	int			  wk_type;
 	int			  wk_rflags;
 	size_t			  wk_len;

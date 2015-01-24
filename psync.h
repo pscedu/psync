@@ -47,7 +47,7 @@ struct stream {
 };
 
 struct file {
-	struct psc_hashent       hentry;
+	struct pfl_hashentry	 hentry;
 	uint64_t		 fid;
 	psc_spinlock_t		 lock;
 	int			 fd;

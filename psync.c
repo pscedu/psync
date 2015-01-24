@@ -345,6 +345,8 @@ blksz = 64 * 1024;
 
 	fh->base = mmap(NULL, stb->st_size, PROT_READ, MAP_FILE |
 	    MAP_PRIVATE, fh->fd, 0);
+	if (fh->base == MAP_FAILED)
+		err(1, "mmap %s", srcfn);
 
 	psc_atomic64_add(&nbytes_total, stb->st_size);
 

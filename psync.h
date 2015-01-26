@@ -178,7 +178,7 @@ extern struct psc_dynarray	 streams;
 extern struct psc_poolmaster	 buf_poolmaster;
 extern struct psc_poolmgr	*buf_pool;
 
-extern struct psc_iostats	 iostats;
+extern struct pfl_opstat	*iostats;
 
 extern struct psc_dynarray	 wkrthrs;
 extern struct psc_dynarray	 rcvthrs;

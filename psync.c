@@ -93,7 +93,7 @@ enum {
 	THRT_DISP,
 	THRT_MAIN,
 	THRT_RCV,
-	THRT_TIOS,
+	THRT_OPSTIMER,
 	THRT_WKR
 };
 
@@ -112,7 +112,7 @@ struct psc_poolmgr	*work_pool;
 
 struct psc_hashtbl	 ino_hashtbl;
 
-struct psc_iostats	 iostats;
+struct pfl_opstat	*iostats;
 
 struct psc_dynarray	 streams = DYNARRAY_INIT;
 
@@ -811,7 +811,6 @@ dispthr_main(struct psc_thread *thr)
 	struct timespec ts, start, d;
 	struct timeval dv;
 	uint64_t xnb, tnb;
-	double rate;
 	int sec;
 
 	if (tgetent(NULL, NULL) == 1)
@@ -823,7 +822,7 @@ dispthr_main(struct psc_thread *thr)
 	ts = start;
 	ts.tv_nsec = 0;
 	while (pscthr_run(thr)) {
-		/* dispthr and tiosthr */
+		/* dispthr and opstimerthr */
 		if (psc_dynarray_len(&rcvthrs) == 0 &&
 		    psc_dynarray_len(&wkrthrs) == 0)
 			break;
@@ -844,12 +843,11 @@ dispthr_main(struct psc_thread *thr)
 		timespecsub(&ts, &start, &d);
 		sec = d.tv_sec;
 
-		rate = psc_iostats_getintvrate(&iostats, 0);
-
 		tnb = psc_atomic64_read(&nbytes_total);
 		xnb = psc_atomic64_read(&nbytes_xfer);
 
-		psc_fmt_human(ratebuf, rate);
+		psc_fmt_human(ratebuf, iostats->opst_last);
+
 		psc_fmt_human(totalbuf, tnb);
 		psc_fmt_human(xferbuf, xnb);
 		flockfile(stdout);
@@ -877,8 +875,7 @@ dispthr_main(struct psc_thread *thr)
 	timespecsub(&ts, &start, &d);
 	dv.tv_sec = sec = d.tv_sec;
 	dv.tv_usec = d.tv_nsec / 1000;
-	rate = psc_iostats_calcrate(iostats.ist_len_total, &dv);
-	psc_fmt_human(ratebuf, rate);
+	psc_fmt_human(ratebuf, iostats->opst_last);
 	psc_fmt_human(totalbuf, psc_atomic64_read(&nbytes_total));
 
 	printf("elapsed %02d:%02d:%02d.%02d  %s total  avg %7s/s%s\n",
@@ -1091,8 +1088,8 @@ main(int argc, char *argv[])
 		dstdir = ".";
 	}
 
-	psc_iostats_init(&iostats, "iostats");
-	psc_tiosthr_spawn(THRT_TIOS, "tios");
+	iostats = pfl_opstat_init("iostats");
+	pfl_opstimerthr_spawn(THRT_OPSTIMER, "opstimerthr");
 
 	do
 		opts.puppet = psc_random32u(1000000);

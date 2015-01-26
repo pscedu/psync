@@ -70,7 +70,7 @@ atomicio(int op, int fd, void *buf, size_t len)
 				    "retries");
 			rc = 0;
 		}
-		psc_iostats_intv_add(&iostats, rc);
+		pfl_opstat_add(iostats, rc);
 	}
 	return (rc);
 }

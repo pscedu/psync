@@ -552,8 +552,16 @@ rpc_handle_putname_req(struct stream *st, struct hdr *h, void *buf)
 		mode |= pn->pstb.mode & _S_IXUGO;
 	psync_chmod(ufn, mode & ~psync_umask, flags);
 
-	if (opts.times)
-		psync_utimes(ufn, pn->pstb.tim, flags);
+	if (opts.times) {
+		if (S_ISREG(pn->pstb.mode)) {
+			struct file *f;
+
+			f = fcache_search(pn->fid);
+			memcpy(f->tim, pn->pstb.tim, sizeof(f->tim));
+			fcache_close(f);
+		} else
+			psync_utimes(ufn, pn->pstb.tim, flags);
+	}
 
 	/* XXX BSD file flags */
 	/* XXX MacOS setattrlist */

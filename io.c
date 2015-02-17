@@ -165,6 +165,12 @@ fcache_close(struct file *f)
 	if (--f->refcnt == 0) {
 		psc_hashent_remove(&fcache, f);
 		psynclog_diag("close fd=%d", f->fd);
+		if (opts.times) {
+			char objfn[PATH_MAX];
+
+			objns_makepath(objfn, f->fid);
+			psync_utimes(objfn, f->tim, 0);
+		}
 		close(f->fd);
 		PSCFREE(f);
 	} else

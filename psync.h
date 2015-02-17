@@ -48,12 +48,14 @@ struct stream {
 	psc_spinlock_t		 lock;
 };
 
+/* reference to a file that is being received */
 struct file {
 	struct pfl_hashentry	 hentry;
 	uint64_t		 fid;
 	psc_spinlock_t		 lock;
 	int			 fd;
 	int			 refcnt;
+	struct pfl_timespec	 tim[2];	/* mtime/atime upon completion */
 };
 
 struct wkrthr {
@@ -66,6 +68,7 @@ struct rcvthr {
 	struct file		*last_f;
 };
 
+/* reference to a file that is being sent */
 struct filehandle {
 	struct psc_listentry	 lentry;
 	struct psc_hashentry	 hentry;

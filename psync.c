@@ -1129,7 +1129,7 @@ main(int argc, char *argv[])
 
 	for (i = 1; i < opts.streams; i++) {
 		/* spawning multiple ssh processes too quickly fails */
-		usleep(30000);
+		usleep(30000 * (1 + i / 10));
 
 		st = stream_cmdopen("%s %s %s --PUPPET=%d",
 		    opts.rsh, host, opts.psync_path, opts.puppet);

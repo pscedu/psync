@@ -144,11 +144,12 @@ filehandle_search(uint64_t fid)
 }
 
 void
-filehandle_dropref(struct filehandle *fh, size_t len)
+filehandle_dropref(struct filehandle *fh)
 {
 	spinlock(&fh->lock);
 	if (--fh->refcnt == 0) {
-		munmap(fh->base, len);
+		if (fh->len)
+			munmap(fh->base, fh->len);
 		psynclog_diag("close fd=%d", fh->fd);
 		close(fh->fd);
 		psc_hashent_remove(&filehandles_hashtbl, fh);
@@ -158,7 +159,7 @@ filehandle_dropref(struct filehandle *fh, size_t len)
 }
 
 struct filehandle *
-filehandle_new(uint64_t fid)
+filehandle_new(uint64_t fid, size_t len)
 {
 	struct filehandle *fh;
 
@@ -168,6 +169,7 @@ filehandle_new(uint64_t fid)
 	INIT_LISTENTRY(&fh->lentry);
 	fh->refcnt++;
 	fh->fid = fid;
+	fh->len = len;
 	psc_hashent_init(&filehandles_hashtbl, fh);
 	psc_hashtbl_add_item(&filehandles_hashtbl, fh);
 	return (fh);
@@ -216,8 +218,7 @@ wkrthr_main(struct psc_thread *thr)
 				    wk->wk_off, wk->wk_fh->base +
 				    wk->wk_off, wk->wk_len);
 			psc_atomic64_add(&nbytes_xfer, wk->wk_len);
-			filehandle_dropref(wk->wk_fh,
-			    wk->wk_stb.st_size);
+			filehandle_dropref(wk->wk_fh);
 			break;
 		case OPC_PUTNAME_REQ:
 			rpc_send_putname_req(st, wk->wk_fid, wk->wk_fn,
@@ -334,7 +335,7 @@ blksz = 64 * 1024;
 		return;
 	}
 
-	fh = filehandle_new(fid);
+	fh = filehandle_new(fid, stb->st_size);
 
 	if (opts.partial)
 		psc_compl_init(&fh->cmpl);
@@ -345,10 +346,12 @@ blksz = 64 * 1024;
 	if (fh->fd == -1)
 		err(1, "%s", srcfn);
 
-	fh->base = mmap(NULL, stb->st_size, PROT_READ, MAP_FILE |
-	    MAP_PRIVATE, fh->fd, 0);
-	if (fh->base == MAP_FAILED)
-		err(1, "mmap %s", srcfn);
+	if (stb->st_size) {
+		fh->base = mmap(NULL, stb->st_size, PROT_READ,
+		    MAP_FILE | MAP_PRIVATE, fh->fd, 0);
+		if (fh->base == MAP_FAILED)
+			err(1, "mmap %s", srcfn);
+	}
 
 	psc_atomic64_add(&nbytes_total, stb->st_size);
 
@@ -373,7 +376,7 @@ blksz = 64 * 1024;
 
 		pscthr_yield();
 	}
-	filehandle_dropref(fh, stb->st_size);
+	filehandle_dropref(fh);
 }
 
 int

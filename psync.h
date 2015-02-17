@@ -76,6 +76,7 @@ struct filehandle {
 	psc_spinlock_t		 lock;
 	struct psc_waitq	 wq;
 	struct psc_compl	 cmpl;
+	size_t			 len;
 };
 
 struct buf {

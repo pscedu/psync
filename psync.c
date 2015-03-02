@@ -814,7 +814,6 @@ dispthr_main(struct psc_thread *thr)
 	char ratbuf[PSCFMT_RATIO_BUFSIZ];
 	struct psc_waitq wq = PSC_WAITQ_INIT;
 	struct timespec ts, start, d;
-	struct timeval dv;
 	uint64_t xnb, tnb;
 	int sec;
 
@@ -878,8 +877,6 @@ dispthr_main(struct psc_thread *thr)
 
 	PFL_GETTIMESPEC(&ts);
 	timespecsub(&ts, &start, &d);
-	dv.tv_sec = sec = d.tv_sec;
-	dv.tv_usec = d.tv_nsec / 1000;
 	psc_fmt_human(ratebuf, iostats->opst_last);
 	psc_fmt_human(totalbuf, psc_atomic64_read(&nbytes_total));
 

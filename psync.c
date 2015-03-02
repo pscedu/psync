@@ -815,7 +815,7 @@ dispthr_main(struct psc_thread *thr)
 	struct psc_waitq wq = PSC_WAITQ_INIT;
 	struct timespec ts, start, d;
 	uint64_t xnb, tnb;
-	int sec;
+	time_t sec = 0;
 
 	if (tgetent(NULL, NULL) == 1)
 		ce_seq = tgetstr("ce", &ce_seq);
@@ -856,7 +856,7 @@ dispthr_main(struct psc_thread *thr)
 		psc_fmt_human(xferbuf, xnb);
 		flockfile(stdout);
 		printf(" %d thr  "
-		    "elapsed %3d:%02d:%02d  "
+		    "elapsed %3ld:%02ld:%02ld  "
 		    "%s xfer  "
 		    "%s ",
 		    opts.streams,
@@ -880,7 +880,7 @@ dispthr_main(struct psc_thread *thr)
 	psc_fmt_human(ratebuf, iostats->opst_last);
 	psc_fmt_human(totalbuf, psc_atomic64_read(&nbytes_total));
 
-	printf("elapsed %02d:%02d:%02d.%02d  %s total  avg %7s/s%s\n",
+	printf("elapsed %02ld:%02ld:%02ld.%02d  %s total  avg %7s/s%s\n",
 	    sec / 60 / 60, (sec / 60) % 60, sec % 60,
 	    (int)(d.tv_nsec / 10000000), totalbuf, ratebuf, ce_seq);
 }

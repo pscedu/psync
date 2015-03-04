@@ -458,8 +458,13 @@ rpc_handle_putname_req(struct stream *st, struct hdr *h, void *buf)
 			return;
 		}
 	} else if (S_ISLNK(pn->pstb.mode)) {
+		/*
+		 * The symbolic path is packed after the FS path in the
+		 * RPC, so we advance past the FS path.
+		 */
 		if (symlink(pn->fn + strlen(pn->fn) + 1, ufn) == -1) {
-			psynclog_warn("symlink %s", ufn);
+			psynclog_warn("symlink %s -> %s", ufn, pn->fn +
+			    strlen(pn->fn) + 1);
 			return;
 		}
 		flags |= AT_SYMLINK_NOFOLLOW;

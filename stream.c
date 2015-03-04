@@ -51,8 +51,8 @@ atomicio(int op, int fd, void *buf, size_t len)
 {
 	size_t rem = len;
 	char *p = buf;
+	ssize_t rc = 0;
 	int nerr = 0;
-	ssize_t rc;
 
 	for (; rem > 0; rem -= rc, p += rc) {
 		if (op == IOP_READ)

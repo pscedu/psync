@@ -945,7 +945,7 @@ getnstreams(int want)
 {
 	int nstr = want;
 
-#ifndef HAVE_GETLOADAVG
+#ifdef HAVE_GETLOADAVG
 	{
 		double avg;
 

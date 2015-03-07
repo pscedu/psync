@@ -191,7 +191,8 @@ fcache_init(void)
 
 int
 objns_rm_cb(const char *fn, __unusedx const struct stat *stb,
-    int ftyp, __unusedx int level, __unusedx void *arg)
+    int ftyp, __unusedx ino_t inum, __unusedx int level,
+    __unusedx void *arg)
 {
 	switch (ftyp) {
 	case PFWT_DP:

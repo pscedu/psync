@@ -381,7 +381,8 @@ blksz = 64 * 1024;
 
 int
 push_putfile_walkcb(const char *fn, const struct stat *stb,
-    __unusedx int type, __unusedx int level, void *arg)
+    __unusedx int type, __unusedx ino_t inum, __unusedx int level,
+    void *arg)
 {
 	struct walkarg *wa = arg;
 	char dstfn[PATH_MAX];

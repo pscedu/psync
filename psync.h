@@ -144,7 +144,7 @@ __dead void
 	  usage(void);
 
 int	  push_putfile_walkcb(const char *, const struct stat *, int,
-	    int, void *);
+    	    ino_t, int, void *);
 
 void	  psync_chown(const char *, uid_t, gid_t, int);
 void	  psync_chmod(const char *, mode_t, int);

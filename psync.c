@@ -404,7 +404,8 @@ push_putfile_walkcb(FTSENT *f, void *arg)
 	t = f->fts_path + wa->skip;
 	while (*t == '/')
 		t++;
-	rc = snprintf(dstfn, sizeof(dstfn), "%s/%s", wa->prefix, t);
+	rc = snprintf(dstfn, sizeof(dstfn), "%s%s%s", wa->prefix, t[0] ?
+	    "/" : "", t);
 	if (rc == -1)
 		psync_fatal("snprintf");
 ///	if (f->fts_level == 0)

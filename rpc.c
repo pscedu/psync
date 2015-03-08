@@ -188,6 +188,11 @@ rpc_send_ready(struct stream *st)
 
 #define LASTFIELDLEN(h, type) ((h)->msglen - sizeof(type))
 
+/*
+ * Handle a GETFILE request.  This simply instructs the puppet to
+ * perform a PUTNAME + PUTDATA based on the parameters defined in this
+ * request.
+ */
 void
 rpc_handle_getfile_req(struct stream *st, __unusedx struct hdr *h,
     void *buf)
@@ -206,15 +211,31 @@ rpc_handle_getfile_req(struct stream *st, __unusedx struct hdr *h,
 
 		travflags = PFL_FILEWALKF_NOCHDIR;
 
-		p = strrchr(gfq->fn, '/');
-		if (p)
-			wa.skip = p - gfq->fn;
-		else
-			wa.skip = 0;
-		wa.prefix = base[0] ? base : ".";
+		if (S_ISDIR(stb.st_mode) || base[0] == '\0') {
+			/*
+			 * If a directory was requested to be received,
+			 * or no destination basename was specified, then
+			 * we must fill in the basename based on the
+			 * requested file set.
+			 *
+			 * `skip' advances pass the root of the dataset
+			 * location so all files from the traversal are
+			 * relative and exactly fit to their destination
+			 * on the receiving host.
+			 */
+			if (opts.recursive)
+				travflags |= PFL_FILEWALKF_RECURSIVE;
+			p = strrchr(gfq->fn, '/');
+			if (p)
+				wa.skip = p - gfq->fn;
+			else
+				wa.skip = 0;
+			wa.prefix = base[0] ? base : ".";
+		} else {
+			wa.skip = strlen(gfq->fn);
+			wa.prefix = base;
+		}
 		wa.rflags = 0;
-		if (S_ISDIR(stb.st_mode) && opts.recursive)
-			travflags |= PFL_FILEWALKF_RECURSIVE;
 
 		gfp.rc = pfl_filewalk(gfq->fn, travflags, NULL,
 		    push_putfile_walkcb, &wa);
@@ -222,7 +243,7 @@ rpc_handle_getfile_req(struct stream *st, __unusedx struct hdr *h,
 		gfp.rc = errno;
 	}
 
-	psynclog_diag("send GETFILE_REP rc=%d", errno);
+	psynclog_diag("send GETFILE_REP rc=%d", gfp.rc);
 	stream_send(st, OPC_GETFILE_REP, &gfp, sizeof(gfp));
 }
 
@@ -255,6 +276,12 @@ rpc_handle_putdata(__unusedx struct stream *st, struct hdr *h,
 
 	psynclog_diag("handle PUTDATA fid=%#"PRIx64, pd->fid);
 
+	/*
+	 * Optimization: there's a good chance this work unit is a later
+	 * chunk of the same file as the last work unit we processed; so
+	 * track the last file and use if appropriate instead of always
+	 * searching anew.
+	 */
 	if (rcvthr->last_f && pd->fid == rcvthr->last_f->fid)
 		f = rcvthr->last_f;
 	else
@@ -264,6 +291,12 @@ rpc_handle_putdata(__unusedx struct stream *st, struct hdr *h,
 		psynclog_error("write off=%"PRId64" len=%zd "
 		    "rc=%zd", pd->off, len, rc);
 
+	/*
+	 * As each thread still processes files in a serial fashion
+	 * (it's just the file chunks that get scattered amongst the
+	 * threads), whenever a `new' file is encountered, this thread
+	 * is done with the old one, so drop our reference.
+	 */
 	if (rcvthr->last_f && pd->fid != rcvthr->last_f->fid)
 		fcache_close(rcvthr->last_f);
 	rcvthr->last_f = f;

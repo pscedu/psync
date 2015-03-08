@@ -190,18 +190,16 @@ fcache_init(void)
 }
 
 int
-objns_rm_cb(const char *fn, __unusedx const struct stat *stb,
-    int ftyp, __unusedx ino_t inum, __unusedx int level,
-    __unusedx void *arg)
+objns_rm_cb(FTSENT *f, __unusedx void *arg)
 {
-	switch (ftyp) {
-	case PFWT_DP:
-		if (rmdir(fn) == -1)
-			warn("rmdir %s", fn);
+	switch (f->fts_info) {
+	case FTS_DP:
+		if (rmdir(f->fts_path) == -1)
+			warn("rmdir %s", f->fts_path);
 		break;
-	case PFWT_F:
-		if (unlink(fn) == -1)
-			warn("unlink %s", fn);
+	case FTS_F:
+		if (unlink(f->fts_path) == -1)
+			warn("unlink %s", f->fts_path);
 		break;
 	}
 	return (0);
@@ -222,7 +220,7 @@ fcache_destroy(void)
 
 	if (objns_path[0]) {
 		/* unlink object namespace */
-		pfl_filewalk(objns_path, PFL_FILEWALKF_RECURSIVE, NULL,
-		    objns_rm_cb, NULL);
+		pfl_filewalk(objns_path, PFL_FILEWALKF_RECURSIVE |
+		    PFL_FILEWALKF_NOCHDIR, NULL, objns_rm_cb, NULL);
 	}
 }

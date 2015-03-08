@@ -31,6 +31,7 @@
 #include <signal.h>
 
 #include "pfl/completion.h"
+#include "pfl/fts.h"
 #include "pfl/hashtbl.h"
 #include "pfl/pthrutil.h"
 
@@ -143,8 +144,7 @@ int	  getnprocessors(void);
 __dead void
 	  usage(void);
 
-int	  push_putfile_walkcb(const char *, const struct stat *, int,
-    	    ino_t, int, void *);
+int	  push_putfile_walkcb(FTSENT *, void *);
 
 void	  psync_chown(const char *, uid_t, gid_t, int);
 void	  psync_chmod(const char *, mode_t, int);

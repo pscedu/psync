@@ -204,7 +204,7 @@ rpc_handle_getfile_req(struct stream *st, __unusedx struct hdr *h,
 	if (stat(gfq->fn, &stb) == 0) {
 		char *p;
 
-		travflags = PFL_FILEWALKF_RELPATH;
+		travflags = PFL_FILEWALKF_NOCHDIR;
 
 		p = strrchr(gfq->fn, '/');
 		if (p)

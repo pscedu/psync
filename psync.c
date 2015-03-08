@@ -56,6 +56,7 @@
 #include "pfl/pfl.h"
 #include "pfl/pool.h"
 #include "pfl/random.h"
+#include "pfl/stat.h"
 #include "pfl/str.h"
 #include "pfl/thread.h"
 #include "pfl/timerthr.h"
@@ -380,9 +381,7 @@ blksz = 64 * 1024;
 }
 
 int
-push_putfile_walkcb(const char *fn, const struct stat *stb,
-    __unusedx int type, __unusedx ino_t inum, __unusedx int level,
-    void *arg)
+push_putfile_walkcb(FTSENT *f, void *arg)
 {
 	struct walkarg *wa = arg;
 	char dstfn[PATH_MAX];
@@ -402,19 +401,19 @@ push_putfile_walkcb(const char *fn, const struct stat *stb,
 		return;
 	}
 #endif
-	t = fn + wa->skip;
+	t = f->fts_path + wa->skip;
 	while (*t == '/')
 		t++;
 	rc = snprintf(dstfn, sizeof(dstfn), "%s/%s", wa->prefix, t);
 	if (rc == -1)
 		psync_fatal("snprintf");
-///	if (level == 0)
+///	if (f->fts_level == 0)
 //		strlcat(dstfn, pfl_basename(fn), sizeof(dstfn));
 
-	if (level > 0)
+	if (f->fts_level > 0)
 		wa->rflags &= ~RPC_PUTNAME_F_TRYDIR;
 
-	enqueue_put(fn, dstfn, stb, wa->rflags);
+	enqueue_put(f->fts_path, dstfn, f->fts_statp, wa->rflags);
 	return (0);
 }
 
@@ -1136,7 +1135,7 @@ main(int argc, char *argv[])
 		spawn_worker_threads(st);
 	}
 
-	travflags = PFL_FILEWALKF_RELPATH;
+	travflags = PFL_FILEWALKF_NOCHDIR;
 	if (opts.recursive)
 		travflags |= PFL_FILEWALKF_RECURSIVE;
 	if (opts.verbose)

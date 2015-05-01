@@ -126,7 +126,6 @@ struct walkarg {
 #define atomicio_read(fd, buf, len)	atomicio(IOP_READ, (fd), (buf), (len))
 #define atomicio_write(fd, buf, len)	atomicio(IOP_WRITE, (fd), (buf), (len))
 
-char	**str_split(char *);
 int	  parsenum(int *, const char *, int, int);
 int	  parsesize(uint64_t *, const char *, uint64_t);
 

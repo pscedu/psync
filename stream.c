@@ -40,6 +40,7 @@
 #include "pfl/atomic.h"
 #include "pfl/iostats.h"
 #include "pfl/random.h"
+#include "pfl/str.h"
 
 #include "psync.h"
 #include "rpc.h"
@@ -131,7 +132,7 @@ stream_cmdopen(const char *fmt, ...)
 		va_start(ap, fmt);
 		vasprintf(&cmd, fmt, ap);
 		va_end(ap);
-		cmdv = str_split(cmd);
+		cmdv = pfl_str_split(cmd);
 
 		close(rfd[0]);
 		close(wfd[1]);

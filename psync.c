@@ -166,6 +166,8 @@ filehandle_new(uint64_t fid, size_t len)
 	struct filehandle *fh;
 
 	fh = psc_pool_get(filehandles_pool);
+	if (fh == NULL)
+		return (NULL);
 	memset(fh, 0, sizeof(*fh));
 	INIT_SPINLOCK(&fh->lock);
 	INIT_LISTENTRY(&fh->lentry);
@@ -341,6 +343,8 @@ blksz = 64 * 1024;
 	}
 
 	fh = filehandle_new(fid, stb->st_size);
+	if (fh == NULL)
+		return;
 
 	if (opts.partial)
 		psc_compl_init(&fh->cmpl);
@@ -766,9 +770,6 @@ puppet_head_mode(void)
 			psync_fatal("%s", opts.dstdir);
 	}
 
-	signal(SIGINT, handle_signal);
-	signal(SIGPIPE, handle_signal);
-
 	if (!recv_auth(STDIN_FILENO, psync_authbuf))
 		psync_fatal("no auth received");
 
@@ -982,6 +983,7 @@ main(int argc, char *argv[])
 	char *p, *fn, *host, *dstfn, *dstdir;
 	int mode, travflags, rflags, i, rv, rc;
 	struct psc_thread *dispthr;
+	struct sigaction sa;
 	struct stream *st;
 
 #if 0
@@ -1026,6 +1028,16 @@ main(int argc, char *argv[])
 	fcache_init();
 
 	lc_reginit(&workq, struct work, wk_lentry, "workq");
+
+	memset(&sa, 0, sizeof(sa));
+	sa.sa_handler = handle_signal;
+	if (sigaction(SIGINT, &sa, NULL) == -1)
+		psync_fatal("sigaction");
+
+	memset(&sa, 0, sizeof(sa));
+	sa.sa_handler = handle_signal;
+	if (sigaction(SIGPIPE, &sa, NULL) == -1)
+		psync_fatal("sigaction");
 
 	if (opts.head)
 		exit(puppet_head_mode());
@@ -1149,9 +1161,6 @@ main(int argc, char *argv[])
 		travflags |= PFL_FILEWALKF_RECURSIVE;
 	if (opts.verbose)
 		travflags |= PFL_FILEWALKF_VERBOSE;
-
-	signal(SIGINT, handle_signal);
-	signal(SIGPIPE, handle_signal);
 
 	dispthr = pscthr_init(THRT_DISP, dispthr_main, NULL, 0,
 	    "dispthr");

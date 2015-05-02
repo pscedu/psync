@@ -487,12 +487,6 @@ rpc_handle_putname_req(struct stream *st, struct hdr *h, void *buf)
 			if (mkdirs(ufn, 0700) == -1 && errno != EEXIST)
 				psynclog_error("mkdirs %s", ufn);
 			*sep = '/';
-
-			/*
-			 * hack since these directories don't always
-			 * seem to appear right away across threads...
-			 */
-			usleep(6000);
 		}
 	}
 
@@ -713,6 +707,7 @@ void
 handle_signal(__unusedx int sig)
 {
 	exit_from_signal = 1;
+	lc_kill(&filehandles_pool->ppm_lc);
 }
 
 void

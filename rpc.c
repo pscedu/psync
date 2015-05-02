@@ -492,7 +492,7 @@ rpc_handle_putname_req(struct stream *st, struct hdr *h, void *buf)
 			 * hack since these directories don't always
 			 * seem to appear right away across threads...
 			 */
-			usleep(5000);
+			usleep(6000);
 		}
 	}
 

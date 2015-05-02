@@ -336,6 +336,7 @@ blksz = 64 * 1024;
 	if (!S_ISREG(stb->st_mode) ||
 	    (opts.links && seen_fid(fid))) {
 		lc_add(&workq, wk);
+		pscthr_yield();
 		return;
 	}
 

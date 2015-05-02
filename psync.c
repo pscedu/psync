@@ -84,6 +84,7 @@ struct work {
 	struct stat		  wk_stb;
 	uint64_t		  wk_xid;
 	uint64_t		  wk_fid;
+	uint64_t		  wk_nchunks;
 	off_t			  wk_off;
 };
 
@@ -217,13 +218,15 @@ wkrthr_main(struct psc_thread *thr)
 			    wk->wk_len))
 				rpc_send_putdata(st, wk->wk_fid,
 				    wk->wk_off, wk->wk_fh->base +
-				    wk->wk_off, wk->wk_len);
+				    wk->wk_off, wk->wk_len,
+				    wk->wk_rflags);
 			psc_atomic64_add(&nbytes_xfer, wk->wk_len);
 			filehandle_dropref(wk->wk_fh);
 			break;
 		case OPC_PUTNAME_REQ:
 			rpc_send_putname_req(st, wk->wk_fid, wk->wk_fn,
-			    &wk->wk_stb, wk->wk_buf, wk->wk_rflags);
+			    &wk->wk_stb, wk->wk_buf, wk->wk_nchunks,
+			    wk->wk_rflags);
 			PSCFREE(wk->wk_buf);
 			break;
 		}
@@ -341,6 +344,7 @@ blksz = 64 * 1024;
 	if (opts.partial)
 		psc_compl_init(&fh->cmpl);
 
+	wk->wk_nchunks = howmany(stb->st_size, blksz);
 	lc_add(&workq, wk);
 
 	fh->fd = open(srcfn, O_RDONLY);
@@ -363,6 +367,9 @@ blksz = 64 * 1024;
 
 		wk->wk_fid = fid;
 		wk->wk_stb.st_size = stb->st_size;
+
+		if (off + (off_t)blksz >= stb->st_size)
+			wk->wk_rflags |= RPC_PUTDATA_F_LAST;
 
 		spinlock(&fh->lock);
 		fh->refcnt++;

@@ -25,6 +25,14 @@
  * %PSC_END_COPYRIGHT%
  */
 
+/*
+ * Remote procedure call interface: binary structures sent over the SSH
+ * stream that define the psync communication protocol (between master
+ * and puppet).
+ *
+ * TODO: convert to network endianess to support other systems.
+ */
+
 #include <sys/param.h>
 #include <sys/stat.h>
 #include <sys/socket.h>
@@ -101,7 +109,7 @@ rpc_send_getfile(struct stream *st, uint64_t xid, const char *fn,
 
 void
 rpc_send_putdata(struct stream *st, uint64_t fid, off_t off,
-    const void *buf, size_t len)
+    const void *buf, size_t len, uint32_t flags)
 {
 	struct rpc_putdata pd;
 	struct iovec iov[2];
@@ -109,6 +117,7 @@ rpc_send_putdata(struct stream *st, uint64_t fid, off_t off,
 	memset(&pd, 0, sizeof(pd));
 	pd.fid = fid;
 	pd.off = off;
+	pd.flags = flags;
 
 	iov[0].iov_base = &pd;
 	iov[0].iov_len = sizeof(pd);
@@ -123,7 +132,8 @@ rpc_send_putdata(struct stream *st, uint64_t fid, off_t off,
 
 void
 rpc_send_putname_req(struct stream *st, uint64_t fid, const char *fn,
-    const struct stat *stb, const char *buf, int rflags)
+    const struct stat *stb, const char *buf, uint64_t nchunks,
+    int rflags)
 {
 	struct rpc_putname_req pn;
 	struct iovec iov[3];
@@ -131,6 +141,7 @@ rpc_send_putname_req(struct stream *st, uint64_t fid, const char *fn,
 
 	memset(&pn, 0, sizeof(pn));
 	pn.flags = rflags;
+	pn.nchunks = nchunks;
 	pn.fid = fid;
 	pn.pstb.dev = stb->st_dev;
 	pn.pstb.rdev = stb->st_rdev;
@@ -290,6 +301,11 @@ rpc_handle_putdata(__unusedx struct stream *st, struct hdr *h,
 	if (rc != (ssize_t)len)
 		psynclog_error("write off=%"PRId64" len=%zd "
 		    "rc=%zd", pd->off, len, rc);
+	spinlock(&f->lock);
+	f->nchunks_seen++;
+	if (pd->flags & RPC_PUTDATA_F_LAST)
+		f->flags |= FF_SAWLAST;
+	freelock(&f->lock);
 
 	/*
 	 * As each thread still processes files in a serial fashion
@@ -379,7 +395,7 @@ rpc_handle_getcksum_rep(struct stream *st, struct hdr *h, void *buf)
 }
 
 /*
- * Apply substitution on filename received.
+ * Apply pattern substitutions on filename received.
  */
 char *
 userfn_subst(const char *fn)
@@ -443,6 +459,7 @@ rpc_handle_putname_req(struct stream *st, struct hdr *h, void *buf)
 	char *sep, *ufn, objfn[PATH_MAX];
 	struct rpc_putname_req *pn = buf;
 	int rc = 0, fd = -1, flags = 0;
+	struct file *f = NULL;
 	mode_t mode;
 
 	/* apply incoming name substitutions */
@@ -470,6 +487,12 @@ rpc_handle_putname_req(struct stream *st, struct hdr *h, void *buf)
 			if (mkdirs(ufn, 0700) == -1 && errno != EEXIST)
 				psynclog_error("mkdirs %s", ufn);
 			*sep = '/';
+
+			/*
+			 * hack since these directories don't always
+			 * seem to appear right away across threads...
+			 */
+			usleep(5000);
 		}
 	}
 
@@ -523,7 +546,6 @@ rpc_handle_putname_req(struct stream *st, struct hdr *h, void *buf)
 		fd = -1;
 	} else if (S_ISREG(pn->pstb.mode)) {
 		struct stat dummy;
-		int ntries = 0;
 
 		objns_makepath(objfn, pn->fid);
 
@@ -543,28 +565,14 @@ rpc_handle_putname_req(struct stream *st, struct hdr *h, void *buf)
 			fd = open(objfn, O_CREAT | O_RDWR, 0600);
 		if (fd == -1) {
 			rc = errno;
-			psynclog_warn("open %s", ufn);
+			psynclog_warn("objns open %s", ufn);
 			goto out;
 		}
 
 		if (!opts.partial)
 			unlink(ufn);
 
- retry:
 		if (link(objfn, ufn) == -1) {
-			/*
-			 * Ugly race workaround hack: on some file
-			 * systems, we seem to actually race between
-			 * mkdirs() above and the dir actually being
-			 * there when the create happens, so try a few
-			 * times.  We should technically do this for all
-			 * file types.
-			 */
-#define MAX_TRIES 5
-			if (ntries++ < MAX_TRIES) {
-				usleep(1000);
-				goto retry;
-			}
 			rc = errno;
 			close(fd);
 			psynclog_warn("link %s -> %s", ufn, objfn);
@@ -583,22 +591,58 @@ rpc_handle_putname_req(struct stream *st, struct hdr *h, void *buf)
 		psync_chown(ufn, pn->pstb.uid, pn->pstb.gid, flags);
 	}
 
+	/*
+	 * Default to all permissions.  The process umask will turn off
+	 * global permissions the user decided to never enable.
+	 * Otherwise, 'perms' and 'executability' options are consulted
+	 * to further determine final permissions.
+	 */
 	mode = S_ISDIR(pn->pstb.mode) ? 0777 : 0666;
 	if (opts.perms)
 		mode = pn->pstb.mode;
 	else if (opts.executability)
 		mode |= pn->pstb.mode & _S_IXUGO;
-	psync_chmod(ufn, mode & ~psync_umask, flags);
+	if (S_ISREG(pn->pstb.mode) || S_ISDIR(pn->pstb.mode)) {
+		if (f == NULL)
+			f = fcache_search(pn->fid);
+
+		/*
+		 * When write permission is not granted on source file,
+		 * it is still desired to transmit the file.  Because
+		 * the fcache API may try to open the file multiple
+		 * times, we cannot set the intended permissions just
+		 * yet, so save them and set them when all file activity
+		 * is complete.
+		 */
+		f->mode = mode;
+	} else
+		psync_chmod(ufn, mode, flags);
 
 	if (opts.times) {
 		if (S_ISREG(pn->pstb.mode)) {
-			struct file *f;
-
-			f = fcache_search(pn->fid);
+			/*
+			 * Subsequent writes will repeatedly update
+			 * mtime so save the intended times and set
+			 * them once when all activity is done.
+			 */
+			if (f == NULL)
+				f = fcache_search(pn->fid);
 			memcpy(f->tim, pn->pstb.tim, sizeof(f->tim));
-			fcache_close(f);
 		} else
 			psync_utimes(ufn, pn->pstb.tim, flags);
+	}
+
+	if (f) {
+		spinlock(&f->lock);
+		f->nchunks = pn->nchunks;
+		f->flags |= FF_LINKED;
+
+		if (pn->pstb.size == 0 ||
+		    !(S_ISREG(pn->pstb.mode) /* ||
+		      S_ISDIR(pn->pstb.mode) */))
+			f->flags |= FF_SAWLAST;
+
+		freelock(&f->lock);
 	}
 
 	/* XXX BSD file flags */
@@ -608,6 +652,8 @@ rpc_handle_putname_req(struct stream *st, struct hdr *h, void *buf)
 
 	if (fd != -1)
 		close(fd);
+	if (f)
+		fcache_close(f);
 
  out:
 	if (opts.partial)

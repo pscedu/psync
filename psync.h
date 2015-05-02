@@ -56,8 +56,15 @@ struct file {
 	psc_spinlock_t		 lock;
 	int			 fd;
 	int			 refcnt;
+	uint64_t		 nchunks_seen;
+	uint64_t		 nchunks;
 	struct pfl_timespec	 tim[2];	/* mtime/atime upon completion */
+	uint32_t		 flags;
+	mode_t			 mode;		/* permission modes upon completion */
 };
+
+#define FF_SAWLAST		(1 << 0)
+#define FF_LINKED		(1 << 1)
 
 struct wkrthr {
 	struct stream		*st;
@@ -129,11 +136,8 @@ void	  objns_makepath(char *, uint64_t);
 
 ssize_t	  atomicio(int, int, void *, size_t);
 
-#define fcache_search(fid)	_fcache_search((fid), -1)
-#define fcache_insert(fid, fd)	_fcache_search((fid), (fd))
-
 struct file *
-	 _fcache_search(uint64_t, int);
+	  fcache_search(uint64_t);
 void	  fcache_close(struct file *);
 void	  fcache_init(void);
 void	  fcache_destroy(void);

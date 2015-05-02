@@ -104,7 +104,7 @@ objns_makepath(char *fn, uint64_t fid)
 }
 
 void
-fcache_found(void *p)
+_fcache_found(void *p)
 {
 	struct file *f = p;
 
@@ -113,18 +113,21 @@ fcache_found(void *p)
 }
 
 struct file *
-_fcache_search(uint64_t fid, int fd)
+fcache_search(uint64_t fid)
 {
 	struct psc_hashbkt *b;
 	struct file *f;
 
-	f = psc_hashtbl_search(&fcache, NULL, fcache_found, &fid);
+	f = psc_hashtbl_search(&fcache, NULL, _fcache_found, &fid);
 	if (f)
 		goto out;
 
 	b = psc_hashbkt_get(&fcache, &fid);
-	f = psc_hashbkt_search(&fcache, b, NULL, fcache_found, &fid);
+	f = psc_hashbkt_search(&fcache, b, NULL, _fcache_found, &fid);
 	if (f == NULL) {
+		char fn[PATH_MAX];
+
+		//f = psc_pool_get(file_pool);
 		f = PSCALLOC(sizeof(*f));
 		INIT_SPINLOCK(&f->lock);
 		f->refcnt = 1;
@@ -132,25 +135,16 @@ _fcache_search(uint64_t fid, int fd)
 		psc_hashent_init(&fcache, f);
 		f->fid = fid;
 
-		if (fd == -1) {
-			char fn[PATH_MAX];
-
-			objns_makepath(fn, fid);
-			f->fd = open(fn, O_RDWR | O_CREAT, 0600);
-			if (f->fd == -1)
-				psync_fatal("%s", fn);
-		} else {
-			f->fd = fd;
-			fd = -1;
-		}
+		objns_makepath(fn, fid);
+		f->fd = open(fn, O_RDWR | O_CREAT, 0600);
+		if (f->fd == -1)
+			psync_fatal("%s", fn);
 
 		psc_hashbkt_add_item(&fcache, b, f);
 	}
 	psc_hashbkt_put(&fcache, b);
 
  out:
-	if (fd != -1)
-		close(fd);
 	freelock(&f->lock);
 	return (f);
 }
@@ -162,19 +156,27 @@ fcache_close(struct file *f)
 
 	b = psc_hashent_getbucket(&fcache, f);
 	spinlock(&f->lock);
-	if (--f->refcnt == 0) {
+	if (--f->refcnt == 0 && (f->flags & (FF_SAWLAST | FF_LINKED)) ==
+	    (FF_SAWLAST | FF_LINKED) && f->nchunks == f->nchunks_seen) {
+		char objfn[PATH_MAX];
+
+		objfn[0] = '\0';
+
 		psc_hashent_remove(&fcache, f);
 		psynclog_diag("close fd=%d", f->fd);
 		if (opts.times) {
-			char objfn[PATH_MAX];
-
-			objns_makepath(objfn, f->fid);
+			if (objfn[0] == '\0')
+				objns_makepath(objfn, f->fid);
 			psync_utimes(objfn, f->tim, 0);
 		}
+		if (objfn[0] == '\0')
+			objns_makepath(objfn, f->fid);
+		psync_chmod(objfn, f->mode, 0);
 		close(f->fd);
 		PSCFREE(f);
 	} else
 		freelock(&f->lock);
+
 	psc_hashbkt_put(&fcache, b);
 }
 
@@ -182,8 +184,10 @@ void
 fcache_init(void)
 {
 	/*
-	 * To saturate a 100Gbps pipe with, say, 4k-sized files, we need
-	 * to send about 3 million in parallel...
+	 * This hash table needs to dynamically resize.  The worst
+	 * situation would be transferring many small files (~4KiB) over
+	 * a 100Gbps pipe, which would require ~3 million open files and
+	 * ~10 million buckets.
 	 */
 	psc_hashtbl_init(&fcache, 0, struct file, fid, hentry, 191,
 	    NULL, "fcache");

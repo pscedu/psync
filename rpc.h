@@ -77,8 +77,12 @@ struct rpc_getfile_req {
 struct rpc_putdata {
 	uint64_t		fid;
 	uint64_t		off;
+	uint32_t		flags;
+	 int32_t		_pad;
 	unsigned char		data[0];
 };
+
+#define RPC_PUTDATA_F_LAST	(1 << 0)	/* this chunk is last one */
 
 struct rpc_checkzero_req {
 	uint64_t		fid;
@@ -104,18 +108,21 @@ struct rpc_putname_req {
 	uint64_t		fid;
 	 int32_t		flags;
 	 int32_t		_pad;
+	uint64_t		nchunks;
 	char			fn[0];
 };
 
 struct rpc_putname_rep {
 	uint64_t		fid;
-	int32_t			rc;
+	 int32_t		rc;
+	 int32_t		_pad;
 };
 
 #define RPC_PUTNAME_F_TRYDIR	(1 << 0)	/* try directory as base */
 
 struct rpc_ready {
-	int32_t			nstreams;
+	 int32_t		nstreams;
+	 int32_t		_pad;
 };
 
 #define AUTH_LEN		1024
@@ -125,9 +132,9 @@ void rpc_send_ready(struct stream *);
 void rpc_send_getfile(struct stream *, uint64_t, const char *,
 	const char *);
 void rpc_send_putdata(struct stream *, uint64_t, off_t, const void *,
-	size_t);
+	size_t, uint32_t);
 void rpc_send_putname_req(struct stream *, uint64_t, const char *,
-	const struct stat *, const char *, int);
+	const struct stat *, const char *, uint64_t, int);
 void rpc_send_putname_rep(struct stream *, uint64_t, int);
 
 void handle_signal(int);

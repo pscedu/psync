@@ -1,9 +1,11 @@
 ## psync - the parallel file transfer tool
 
-psync is an rsync-like clone that offers multiple streams in parallel
-for transferring file data.
+psync is an rsync-like clone that uses multiple transfer streams in
+parallel for transferring file data, designed to achieve higher
+performance when transferring between parallel file system backends.
 
-More usage details are available in the psync(1) manual page.
+More usage details are available in the psync(1) manual page included
+in the distribution.
 
 ### Installation
 
@@ -11,8 +13,8 @@ Requires GNU make >= 3.81.
 
 Grab PFL:
 
-    $ git clone https://www.github.com/pscedu/proj
-    $ cd proj
+    $ git clone https://www.github.com/pscedu/pfl psc-projects
+    $ cd psc-projects
 
 Grab psync:
 

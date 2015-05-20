@@ -104,7 +104,7 @@ objns_makepath(char *fn, uint64_t fid)
 }
 
 void
-_fcache_found(void *p)
+_fcache_found(void *p, __unusedx void *arg)
 {
 	struct file *f = p;
 
@@ -118,12 +118,13 @@ fcache_search(uint64_t fid)
 	struct psc_hashbkt *b;
 	struct file *f;
 
-	f = psc_hashtbl_search(&fcache, NULL, _fcache_found, &fid);
+	f = psc_hashtbl_search_cb(&fcache, _fcache_found, NULL, &fid);
 	if (f)
 		goto out;
 
 	b = psc_hashbkt_get(&fcache, &fid);
-	f = psc_hashbkt_search(&fcache, b, NULL, _fcache_found, &fid);
+	f = psc_hashbkt_search_cb(&fcache, b, _fcache_found, NULL,
+	    &fid);
 	if (f == NULL) {
 		char fn[PATH_MAX];
 

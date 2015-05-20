@@ -141,8 +141,7 @@ unsigned char		 psync_authbuf[AUTH_LEN];
 struct filehandle *
 filehandle_search(uint64_t fid)
 {
-	return (psc_hashtbl_search(&filehandles_hashtbl, NULL, NULL,
-	    &fid));
+	return (psc_hashtbl_search(&filehandles_hashtbl, &fid));
 }
 
 void
@@ -270,7 +269,7 @@ seen_fid(ino_t fid)
 	int seen = 1;
 
 	b = psc_hashbkt_get(&ino_hashtbl, &kfid);
-	i = psc_hashbkt_search(&ino_hashtbl, b, NULL, NULL, &kfid);
+	i = psc_hashbkt_search(&ino_hashtbl, b, &kfid);
 	if (i == NULL) {
 		i = PSCALLOC(sizeof(*i));
 		i->i_fid = kfid;

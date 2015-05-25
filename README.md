@@ -4,6 +4,9 @@ psync is an rsync-like clone that uses multiple transfer streams in
 parallel for transferring file data, designed to achieve higher
 performance when transferring between parallel file system backends.
 
+Most rsync features are not implemented yet; however the core transfer
+mechanism has already provided much utility in our environments.
+
 More usage details are available in the psync(1) manual page included
 in the distribution.
 

@@ -2,3 +2,5 @@
   head socket
 - pass some kind of success message on start to verify the puppet
   strings are all OK
+- only mmap() on regular files during transmission, so piping into stdin
+  could work

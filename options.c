@@ -128,7 +128,7 @@ struct option longopts[] = {
 	{ "remove-source-files",NO_ARG,	&opts.remove_source_files,1 },
 	{ "rsh",		REQARG,	NULL,			'e' },
 	{ "safe-links",		NO_ARG,	&opts.safe_links,	1 },
-	{ "size-only",		NO_ARG,	&opts.size_only,		1 },
+	{ "size-only",		NO_ARG,	&opts.size_only,	1 },
 	{ "sockopts",		REQARG,	NULL,			OPT_SOCKOPTS },
 	{ "sparse",		NO_ARG,	NULL,			'S' },
 	{ "specials",		NO_ARG,	&opts.specials,		1 },

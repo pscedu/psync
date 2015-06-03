@@ -132,7 +132,9 @@ psc_spinlock_t		 rcvthrs_lock = SPINLOCK_INIT;
 psc_atomic64_t		 nbytes_total = PSC_ATOMIC64_INIT(0);
 psc_atomic64_t		 nbytes_xfer = PSC_ATOMIC64_INIT(0);
 
-psc_atomic64_t		 psync_fid = PSC_ATOMIC64_INIT(0);
+psc_atomic64_t		 psync_offset_index = PSC_ATOMIC64_INIT(0);
+psc_atomic64_t		 psync_fid = PSC_ATOMIC64_INIT(0);	/* file ID (fake inumber) */
+psc_atomic64_t		 psync_nfiles_xfer = PSC_ATOMIC64_INIT(0);
 
 struct psc_compl	 psync_ready = PSC_COMPL_INIT;
 
@@ -216,11 +218,22 @@ wkrthr_main(struct psc_thread *thr)
 
 			if (opts.sparse == 0 ||
 			    !pfl_memchk(wk->wk_fh->base + wk->wk_off, 0,
-			    wk->wk_len))
+			    wk->wk_len)) {
+//				void *offp, *bp = malloc(wk->wk_len);
+				void *offp;
+
+//				pread(wk->wk_fh->fd, bp, wk->wk_len,
+//				    wk->wk_off);
+
+				offp = wk->wk_fh->base + wk->wk_off;
+				posix_madvise(offp, wk->wk_len * 2000,
+				    POSIX_MADV_WILLNEED);
 				rpc_send_putdata(st, wk->wk_fid,
-				    wk->wk_off, wk->wk_fh->base +
-				    wk->wk_off, wk->wk_len,
+				    wk->wk_off, offp, wk->wk_len,
 				    wk->wk_rflags);
+
+//				free(bp);
+			}
 			psc_atomic64_add(&nbytes_xfer, wk->wk_len);
 			filehandle_dropref(wk->wk_fh);
 			break;
@@ -334,6 +347,8 @@ blksz = 64 * 1024;
 	psynclog_diag("enqueue PUTNAME_REQ localfn=%s dstfn=%s flags=%d",
 	    srcfn, wk->wk_fn, rflags);
 
+	psc_atomic64_inc(&psync_nfiles_xfer);
+
 	if (!S_ISREG(stb->st_mode) ||
 	    (opts.links && seen_fid(fid))) {
 		lc_add(&workq, wk);
@@ -342,6 +357,9 @@ blksz = 64 * 1024;
 	}
 
 	fh = filehandle_new(fid, stb->st_size);
+	/*
+	 * If exiting due to reception of SIGHUP, the pool will be dead.
+	 */
 	if (fh == NULL)
 		return;
 
@@ -364,7 +382,10 @@ blksz = 64 * 1024;
 
 	psc_atomic64_add(&nbytes_total, stb->st_size);
 
-	/* push data chunks */
+	/*
+	 * Now push data chunks from the file onto a work queue consumed
+	 * by worker threads.
+	 */
 	for (; off < stb->st_size; off += blksz) {
 		wk = work_getitem(OPC_PUTDATA);
 		wk->wk_fh = fh;
@@ -372,6 +393,7 @@ blksz = 64 * 1024;
 		wk->wk_fid = fid;
 		wk->wk_stb.st_size = stb->st_size;
 
+		/* Mark EOF. */
 		if (off + (off_t)blksz >= stb->st_size)
 			wk->wk_rflags |= RPC_PUTDATA_F_LAST;
 
@@ -398,6 +420,9 @@ push_putfile_walkcb(FTSENT *f, void *arg)
 	char dstfn[PATH_MAX];
 	const char *t;
 	int rc = 0;
+
+	if (exit_from_signal)
+		return (-1);
 
 #if 0
 	struct filterpat *fp;
@@ -769,6 +794,11 @@ puppet_head_mode(void)
 			psync_fatal("%s", opts.dstdir);
 	}
 
+	/*
+	 * Receive an 'authentication buffer' from our socket to the
+	 * remote side.  This is used to authenticate connections made
+	 * to our UNIX domain socket from psync slaves.
+	 */
 	if (!recv_auth(STDIN_FILENO, psync_authbuf))
 		psync_fatal("no auth received");
 
@@ -864,7 +894,7 @@ dispthr_main(struct psc_thread *thr)
 		psc_fmt_human(totalbuf, tnb);
 		psc_fmt_human(xferbuf, xnb);
 		flockfile(stdout);
-		printf(" %d thr  "
+		printf("\r%2d thr  "
 		    "elapsed %3ld:%02ld:%02ld  "
 		    "%s xfer  "
 		    "%s ",
@@ -877,7 +907,7 @@ dispthr_main(struct psc_thread *thr)
 		} else {
 			printf("calculating...  ");
 		}
-		printf("%7s/s%s\r", ratebuf, ce_seq);
+		printf("%7s/s%s ", ratebuf, ce_seq);
 		fflush(stdout);
 		funlockfile(stdout);
 	}
@@ -890,9 +920,16 @@ dispthr_main(struct psc_thread *thr)
 	    (d.tv_sec + d.tv_nsec * 1e-9));
 	psc_fmt_human(totalbuf, psc_atomic64_read(&nbytes_total));
 
-	printf("elapsed %02ld:%02ld:%02ld.%02d  %s total  avg %7s/s%s\n",
+	printf("\r%2d thr  "
+	    "elapsed %02ld:%02ld:%02ld  "
+	    "%s bytes  "
+	    "%6"PRId64" file(s)  "
+	    "avg %7s/s%s\n",
+	    opts.streams,
 	    sec / 60 / 60, (sec / 60) % 60, sec % 60,
-	    (int)(d.tv_nsec / 10000000), totalbuf, ratebuf, ce_seq);
+	    totalbuf,
+	    psc_atomic64_read(&psync_nfiles_xfer),
+	    ratebuf, ce_seq);
 }
 
 #if defined(SYS_sched_getaffinity) && !defined(CPU_COUNT)

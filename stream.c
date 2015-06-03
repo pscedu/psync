@@ -86,6 +86,7 @@ stream_sendxv(struct stream *st, uint64_t xid, int opc,
 	struct hdr hdr;
 	int i;
 
+	hdr.magic = PSYNC_MAGIC;
 	hdr.opc = opc;
 	hdr.msglen = 0;
 	for (i = 0; i < nio; i++)
@@ -102,6 +103,7 @@ stream_sendxv(struct stream *st, uint64_t xid, int opc,
 		    iov[i].iov_len);
 	freelock(&st->lock);
 }
+
 void
 stream_sendx(struct stream *st, uint64_t xid, int opc, void *p,
     size_t len)

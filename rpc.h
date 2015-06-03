@@ -29,6 +29,7 @@
 #define _RPC_H_
 
 struct hdr {
+	uint64_t		magic;
 	uint32_t		opc;	/* operation code */
 	uint32_t		msglen;	/* length of payload */
 	uint64_t		xid;	/* message ID */
@@ -126,6 +127,8 @@ struct rpc_ready {
 };
 
 #define AUTH_LEN		1024
+
+#define PSYNC_MAGIC		UINT64_C(0xf1f2f3f4f5f6f7f8)
 
 void rpc_send_done(struct stream *);
 void rpc_send_ready(struct stream *);

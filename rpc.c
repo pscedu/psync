@@ -710,10 +710,31 @@ handle_signal(__unusedx int sig)
 	lc_kill(&filehandles_pool->ppm_lc);
 }
 
+/*
+ * Emit a warning contain a message which may container visibly "unsafe"
+ * characters.
+ */
+void
+psynclog_warnv(void *s, size_t len)
+{
+	char buf[LINE_MAX];
+
+	len = MIN(sizeof(buf), len * 4 + 1);
+	strnvis(buf, s, len, VIS_SAFE);
+	flockfile(stderr);
+	fprintf(stderr,
+	    "----------------------------------------------------\n"
+	    "%s\n"
+	    "----------------------------------------------------\n",
+	    buf);
+	funlockfile(stderr);
+}
+
 void
 rcvthr_main(struct psc_thread *thr)
 {
 	void *buf = NULL;
+	char lnbuf[LINE_MAX];
 	uint32_t bufsz = 0;
 	struct rcvthr *rcvthr;
 	struct stream *st;
@@ -729,6 +750,14 @@ rcvthr_main(struct psc_thread *thr)
 		if (exit_from_signal)
 			break;
 
+		if (hdr.magic != PSYNC_MAGIC) {
+			psynclog_warnx("invalid header received from peer:\n");
+			psynclog_warnv(&hdr, sizeof(hdr));
+			rc = read(st->rfd, lnbuf, sizeof(lnbuf));
+			if (rc > 0)
+				psynclog_warnv(lnbuf, rc);
+			break;
+		}
 		if (hdr.msglen > bufsz) {
 			if (hdr.msglen > MAX_BUFSZ)
 				psync_fatalx("invalid bufsz received "

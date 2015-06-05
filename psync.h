@@ -178,6 +178,7 @@ extern volatile sig_atomic_t	 exit_from_signal;
 
 extern int			 psync_is_master;
 extern psc_atomic64_t		 psync_xid;
+extern psc_atomic64_t		 psync_nfiles_xfer;
 extern mode_t			 psync_umask;
 
 extern struct psc_compl		 psync_ready;

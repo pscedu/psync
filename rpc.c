@@ -456,9 +456,9 @@ userfn_subst(const char *fn)
 void
 rpc_handle_putname_req(struct stream *st, struct hdr *h, void *buf)
 {
+	int rc = 0, fd = -1, flags = 0;
 	char *sep, *ufn, objfn[PATH_MAX];
 	struct rpc_putname_req *pn = buf;
-	int rc = 0, fd = -1, flags = 0;
 	struct file *f = NULL;
 	mode_t mode;
 
@@ -648,6 +648,8 @@ rpc_handle_putname_req(struct stream *st, struct hdr *h, void *buf)
 		close(fd);
 	if (f)
 		fcache_close(f);
+
+	psc_atomic64_inc(&psync_nfiles_xfer);
 
  out:
 	if (opts.partial)

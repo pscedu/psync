@@ -33,6 +33,7 @@
 #include "pfl/completion.h"
 #include "pfl/fts.h"
 #include "pfl/hashtbl.h"
+#include "pfl/heap.h"
 #include "pfl/pthrutil.h"
 
 struct iovec;
@@ -76,7 +77,7 @@ struct rcvthr {
 	struct file		*last_f;
 };
 
-/* reference to a file that is being sent */
+/* a file that is being sent */
 struct filehandle {
 	struct psc_listentry	 lentry;
 	struct psc_hashentry	 hentry;
@@ -88,6 +89,8 @@ struct filehandle {
 	struct psc_waitq	 wq;
 	struct psc_compl	 cmpl;
 	size_t			 len;
+	struct pfl_heap		 done_heap;
+	off_t			 done_off;
 };
 
 struct buf {

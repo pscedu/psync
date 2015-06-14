@@ -372,7 +372,8 @@ parseopts(int argc, char **argv)
 			if (!parsenum(&opts.modify_window, optarg, 0, INT_MAX))
 				err(1, "--modify-window=%s", optarg);
 			break;
-		case OPT_ONLY_WRITE_BATCH:opts.write_batch = optarg;	break;
+		case OPT_OFFSET_LOG_FILE: opts.offset_log_file = optarg;break;
+		case OPT_ONLY_WRITE_BATCH: opts.write_batch = optarg;	break;
 		case OPT_OUT_FORMAT:	opts.out_format = optarg;	break;
 		case OPT_PORT:
 			if (!parsenum(&opts.port, optarg, 0, 65535))

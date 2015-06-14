@@ -48,6 +48,7 @@
 #include "pfl/cdefs.h"
 #include "pfl/fmt.h"
 #include "pfl/hashtbl.h"
+#include "pfl/heap.h"
 #include "pfl/iostats.h"
 #include "pfl/list.h"
 #include "pfl/listcache.h"
@@ -68,11 +69,14 @@
 #include "psync.h"
 #include "rpc.h"
 
+#define PSYNC_BLKSZ	(64 * 1024)
+
 #define MODE_GET	0
 #define MODE_PUT	1
 
 struct work {
 	struct psc_listentry	  wk_lentry;
+	struct pfl_heap_entry	  wk_hpentry;
 	char			  wk_fn[PATH_MAX];
 	char			  wk_basefn[NAME_MAX + 1];
 	struct filehandle	 *wk_fh;
@@ -95,6 +99,7 @@ struct ino_entry {
 
 enum {
 	THRT_DISP,
+	THRT_DONE,
 	THRT_MAIN,
 	THRT_RCV,
 	THRT_OPSTIMER,
@@ -111,6 +116,7 @@ struct psc_poolmgr	*filehandles_pool;
 struct psc_hashtbl	 filehandles_hashtbl;
 
 struct psc_listcache	 workq;
+struct psc_listcache	 psync_doneq;
 struct psc_poolmaster	 work_poolmaster;
 struct psc_poolmgr	*work_pool;
 
@@ -146,9 +152,11 @@ filehandle_search(uint64_t fid)
 	return (psc_hashtbl_search(&filehandles_hashtbl, &fid));
 }
 
-void
+int
 filehandle_dropref(struct filehandle *fh)
 {
+	int rc = 0;
+
 	spinlock(&fh->lock);
 	if (--fh->refcnt == 0) {
 		if (fh->len)
@@ -156,9 +164,20 @@ filehandle_dropref(struct filehandle *fh)
 		psynclog_diag("close fd=%d", fh->fd);
 		close(fh->fd);
 		psc_hashent_remove(&filehandles_hashtbl, fh);
+		psc_assert(pfl_heap_nitems(&fh->done_heap) == 0);
 		psc_pool_return(filehandles_pool, fh);
+		rc = 1;
 	} else
 		freelock(&fh->lock);
+	return (0);
+}
+
+int
+wk_heapcmp(const void *a, const void *b)
+{
+	const struct work *x = a, *y = b;
+
+	return (CMP(x->wk_off, y->wk_off));
 }
 
 struct filehandle *
@@ -172,6 +191,8 @@ filehandle_new(uint64_t fid, size_t len)
 	memset(fh, 0, sizeof(*fh));
 	INIT_SPINLOCK(&fh->lock);
 	INIT_LISTENTRY(&fh->lentry);
+	pfl_heap_init(&fh->done_heap, struct work, wk_hpentry,
+	    wk_heapcmp);
 	fh->refcnt++;
 	fh->fid = fid;
 	fh->len = len;
@@ -180,12 +201,66 @@ filehandle_new(uint64_t fid, size_t len)
 	return (fh);
 }
 
+int
+count_pages(unsigned char *buf, size_t len)
+{
+	unsigned char *p;
+	int np = 0;
+
+	for (p = buf; p < buf + len; p++)
+		if (*p & 1)
+			np++;
+	return (np);
+}
+
+void
+donethr_main(struct psc_thread *thr)
+{
+	struct filehandle *fh;
+	struct work *wk;
+	void *offp;
+	int done;
+
+	while (pscthr_run(thr)) {
+		wk = lc_getwait(&psync_doneq);
+		if (wk == NULL)
+			break;
+		fh = wk->wk_fh;
+		pfl_heap_add(&fh->done_heap, wk);
+
+		do {
+			wk = pfl_heap_peek(&fh->done_heap);
+			if (wk == NULL ||
+			    wk->wk_off != fh->done_off)
+				break;
+			pfl_heap_remove(&fh->done_heap, wk);
+			offp = fh->base + wk->wk_off;
+			posix_madvise(offp, wk->wk_len,
+			    POSIX_MADV_DONTNEED);
+			fh->done_off = wk->wk_off + wk->wk_len;
+			done = filehandle_dropref(fh);
+			psc_pool_return(work_pool, wk);
+		} while (!done);
+	}
+}
+
 void
 wkrthr_main(struct psc_thread *thr)
 {
+	unsigned char *vbuf = NULL;
 	struct wkrthr *wkrthr = thr->pscthr_private;
 	struct stream *st = wkrthr->st;
 	struct work *wk;
+	FILE *logfp;
+
+	logfp = opts.offset_log_fp;
+	if (logfp) {
+		long pgsz, n;
+
+		pgsz = sysconf(_SC_PAGESIZE);
+		n = howmany(PSYNC_BLKSZ, pgsz);
+		vbuf = PSCALLOC(n);
+	}
 
 	while (pscthr_run(thr)) {
 		wk = lc_getwait(&workq);
@@ -199,43 +274,53 @@ wkrthr_main(struct psc_thread *thr)
 			break;
 		case OPC_PUTDATA:
 #if 0
-		if (opts.partial) {
-			psc_compl_wait(&wk->wk_fh->cmpl);
-			if (checksum) {
-				wk = work_getitem(OPC_GETCKSUM_REQ);
+			if (opts.partial) {
+				psc_compl_wait(&wk->wk_fh->cmpl);
+				if (checksum) {
+					wk = work_getitem(OPC_GETCKSUM_REQ);
+					wk->wk_off = off;
+					wk->wk_len = ;
+					lc_add(&workq, wk);
+					return;
+				}
+				wk = work_getitem(OPC_GETSTAT_REQ);
 				wk->wk_off = off;
 				wk->wk_len = ;
 				lc_add(&workq, wk);
 				return;
 			}
-			wk = work_getitem(OPC_GETSTAT_REQ);
-			wk->wk_off = off;
-			wk->wk_len = ;
-			lc_add(&workq, wk);
-			return;
-		}
 #endif
 
 			if (opts.sparse == 0 ||
 			    !pfl_memchk(wk->wk_fh->base + wk->wk_off, 0,
 			    wk->wk_len)) {
-//				void *offp, *bp = malloc(wk->wk_len);
 				void *offp;
 
-//				pread(wk->wk_fh->fd, bp, wk->wk_len,
-//				    wk->wk_off);
-
 				offp = wk->wk_fh->base + wk->wk_off;
+				if (logfp) {
+					mincore(offp, wk->wk_len, vbuf);
+					flockfile(logfp);
+					fprintf(logfp, "%"PRId64"\t"
+					    "%"PRId64"\t%d\n",
+					    psc_atomic64_inc_getnew(
+					    &psync_offset_index),
+					    wk->wk_off,
+					    count_pages(vbuf,
+					    howmany(PSYNC_BLKSZ,
+					    wk->wk_len)));
+					funlockfile(logfp);
+				}
 				posix_madvise(offp, wk->wk_len * 2000,
 				    POSIX_MADV_WILLNEED);
 				rpc_send_putdata(st, wk->wk_fid,
 				    wk->wk_off, offp, wk->wk_len,
 				    wk->wk_rflags);
-
-//				free(bp);
 			}
 			psc_atomic64_add(&nbytes_xfer, wk->wk_len);
-			filehandle_dropref(wk->wk_fh);
+
+			lc_addtail_ifalive(&psync_doneq, wk);
+			wk = NULL;
+
 			break;
 		case OPC_PUTNAME_REQ:
 			rpc_send_putname_req(st, wk->wk_fid, wk->wk_fn,
@@ -245,11 +330,14 @@ wkrthr_main(struct psc_thread *thr)
 			break;
 		}
 
-		psc_pool_return(work_pool, wk);
+		if (wk)
+			psc_pool_return(work_pool, wk);
 
 		if (exit_from_signal)
 			break;
 	}
+
+	PSCFREE(vbuf);
 
 	rpc_send_done(st);
 
@@ -309,7 +397,7 @@ enqueue_put(const char *srcfn, const char *dstfn,
 
 	blksz = opts.block_size ? (blksize_t)opts.block_size :
 	    stb->st_blksize;
-blksz = 64 * 1024;
+blksz = PSYNC_BLKSZ;
 
 	if (S_ISLNK(stb->st_mode)) {
 		if (!opts.links)
@@ -832,6 +920,7 @@ puppet_head_mode(void)
 	psynclog_diag("rcvthrs done");
 
 	lc_kill(&workq);
+	lc_kill(&psync_doneq);
 
 	while (psc_dynarray_len(&wkrthrs))
 		usleep(10000);
@@ -1018,7 +1107,7 @@ main(int argc, char *argv[])
 {
 	char *p, *fn, *host, *dstfn, *dstdir;
 	int mode, travflags, rflags, i, rv, rc;
-	struct psc_thread *dispthr;
+	struct psc_thread *dispthr, *donethr;
 	struct sigaction sa;
 	struct stream *st;
 
@@ -1064,6 +1153,7 @@ main(int argc, char *argv[])
 	fcache_init();
 
 	lc_reginit(&workq, struct work, wk_lentry, "workq");
+	lc_reginit(&psync_doneq, struct work, wk_lentry, "doneq");
 
 	memset(&sa, 0, sizeof(sa));
 	sa.sa_handler = handle_signal;
@@ -1075,6 +1165,9 @@ main(int argc, char *argv[])
 	if (sigaction(SIGPIPE, &sa, NULL) == -1)
 		psync_fatal("sigaction");
 
+	donethr = pscthr_init(THRT_DONE, donethr_main, NULL, 0,
+	    "donethr");
+
 	if (opts.head)
 		exit(puppet_head_mode());
 	if (opts.puppet)
@@ -1085,6 +1178,12 @@ main(int argc, char *argv[])
 	if (argc < 2 ||
 	    (argc == 1 && psc_dynarray_len(&opts.files) == 0))
 		usage();
+
+	if (opts.offset_log_file) {
+		opts.offset_log_fp = fopen(opts.offset_log_file, "a");
+		if (opts.offset_log_fp == NULL)
+			warn("%s", opts.offset_log_file);
+	}
 
 	/*
 	 * psync a ... b
@@ -1220,7 +1319,10 @@ main(int argc, char *argv[])
 	while (psc_dynarray_len(&rcvthrs) || psc_dynarray_len(&wkrthrs))
 		usleep(10000);
 
+	lc_kill(&psync_doneq);
+
 	pthread_join(dispthr->pscthr_pthread, NULL);
+	pthread_join(donethr->pscthr_pthread, NULL);
 
 	fcache_destroy();
 

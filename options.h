@@ -62,6 +62,7 @@ enum {
 	/* psync specific options */
 	OPT_DSTDIR,
 	OPT_HEAD,
+	OPT_OFFSET_LOG_FILE,
 	OPT_PUPPET
 };
 
@@ -78,6 +79,8 @@ struct options {
 	uint64_t		 max_size;
 	uint64_t		 min_size;
 	int			 modify_window;
+	const char		*offset_log_file;
+	FILE			*offset_log_fp;
 	const char		*out_format;
 	const char		*partial_dir;
 	const char		*password_file;

@@ -169,7 +169,7 @@ filehandle_dropref(struct filehandle *fh)
 		rc = 1;
 	} else
 		freelock(&fh->lock);
-	return (0);
+	return (rc);
 }
 
 int

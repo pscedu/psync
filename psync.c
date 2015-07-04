@@ -466,7 +466,7 @@ blksz = PSYNC_BLKSZ;
 		    MAP_FILE | MAP_PRIVATE, fh->fd, 0);
 		if (fh->base == MAP_FAILED)
 			err(1, "mmap %s", srcfn);
-		posix_madvise(fh->base, stb->st-size,
+		posix_madvise(fh->base, stb->st_size,
 		    POSIX_MADV_SEQUENTIAL);
 
 	}
@@ -770,7 +770,7 @@ puppet_limb_mode(void)
 	    "%s/.psync.%d.sock", _PATH_TMP, opts.puppet);
 	if (rc == -1)
 		psync_fatal("snprintf");
-	if (rc < 1 || rc > (int)sizeof(sun.sun_path))
+	if (rc < 1 || (size_t)rc > sizeof(sun.sun_path))
 		psync_fatalx("snprintf: invalid path");
 
 	for (;;) {
@@ -852,7 +852,7 @@ puppet_head_mode(void)
 	    "%s/.psync.%d.sock", _PATH_TMP, opts.puppet);
 	if (rc == -1)
 		psync_fatal("snprintf");
-	if (rc < 1 || rc > (int)sizeof(sun.sun_path))
+	if (rc < 1 || (size_t)rc > sizeof(sun.sun_path))
 		psync_fatalx("snprintf: invalid path");
 
 	if (unlink(sun.sun_path) == -1 && errno != ENOENT)

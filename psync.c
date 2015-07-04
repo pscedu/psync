@@ -466,6 +466,9 @@ blksz = PSYNC_BLKSZ;
 		    MAP_FILE | MAP_PRIVATE, fh->fd, 0);
 		if (fh->base == MAP_FAILED)
 			err(1, "mmap %s", srcfn);
+		posix_madvise(fh->base, stb->st-size,
+		    POSIX_MADV_SEQUENTIAL);
+
 	}
 
 	psc_atomic64_add(&nbytes_total, stb->st_size);

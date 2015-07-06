@@ -4,3 +4,10 @@
   strings are all OK
 - only mmap() on regular files during transmission, so piping into stdin
   could work
+- add --partial support
+- remove pathnames in psync to increase speed (FTS_CHDIR)
+- respect rsync -h (human readable numbers)
+- fork and do local sockets with no ssh for local-to-local mode
+- -v verbose mode is broken
+- default output should be total silence without --progress
+- writes should be sequential on receiving end

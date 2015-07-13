@@ -38,7 +38,7 @@
 
 #include "pfl/alloc.h"
 #include "pfl/atomic.h"
-#include "pfl/iostats.h"
+#include "pfl/opstats.h"
 #include "pfl/random.h"
 #include "pfl/str.h"
 

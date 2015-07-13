@@ -49,7 +49,7 @@
 #include "pfl/fmt.h"
 #include "pfl/hashtbl.h"
 #include "pfl/heap.h"
-#include "pfl/iostats.h"
+#include "pfl/opstats.h"
 #include "pfl/list.h"
 #include "pfl/listcache.h"
 #include "pfl/log.h"

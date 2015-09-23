@@ -981,7 +981,7 @@ dispthr_main(struct psc_thread *thr)
 		tnb = psc_atomic64_read(&nbytes_total);
 		xnb = psc_atomic64_read(&nbytes_xfer);
 
-		psc_fmt_human(ratebuf, iostats->opst_last);
+		psc_fmt_human(ratebuf, iostats->opst_intv);
 
 		psc_fmt_human(totalbuf, tnb);
 		psc_fmt_human(xferbuf, xnb);

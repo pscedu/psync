@@ -981,10 +981,10 @@ dispthr_main(struct psc_thread *thr)
 		tnb = psc_atomic64_read(&nbytes_total);
 		xnb = psc_atomic64_read(&nbytes_xfer);
 
-		psc_fmt_human(ratebuf, iostats->opst_intv);
+		pfl_fmt_human(ratebuf, iostats->opst_intv);
 
-		psc_fmt_human(totalbuf, tnb);
-		psc_fmt_human(xferbuf, xnb);
+		pfl_fmt_human(totalbuf, tnb);
+		pfl_fmt_human(xferbuf, xnb);
 		flockfile(stdout);
 		printf("\r%2d thr  "
 		    "elapsed %3ld:%02ld:%02ld  "
@@ -994,7 +994,7 @@ dispthr_main(struct psc_thread *thr)
 		    sec / 60 / 60, (sec / 60) % 60, sec % 60,
 		    xferbuf, totalbuf);
 		if (workq.plc_flags & PLCF_DYING) {
-			psc_fmt_ratio(ratbuf, xnb, tnb);
+			pfl_fmt_ratio(ratbuf, xnb, tnb);
 			printf("total %6s    ", ratbuf);
 		} else {
 			printf("calculating...  ");
@@ -1008,9 +1008,9 @@ dispthr_main(struct psc_thread *thr)
 
 	PFL_GETTIMESPEC(&ts);
 	timespecsub(&ts, &start, &d);
-	psc_fmt_human(ratebuf, psc_atomic64_read(&iostats->opst_lifetime) /
+	pfl_fmt_human(ratebuf, psc_atomic64_read(&iostats->opst_lifetime) /
 	    (d.tv_sec + d.tv_nsec * 1e-9));
-	psc_fmt_human(totalbuf, psc_atomic64_read(&nbytes_total));
+	pfl_fmt_human(totalbuf, psc_atomic64_read(&nbytes_total));
 
 	printf("\r%2d thr  "
 	    "elapsed %02ld:%02ld:%02ld  "

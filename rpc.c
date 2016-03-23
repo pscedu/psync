@@ -467,6 +467,7 @@ rpc_handle_putname_req(struct stream *st, struct hdr *h, void *buf)
 	psynclog_diag("handle PUTNAME_REQ xid=%#"PRIx64" %s -> %s "
 	    "mode=%0o flags=%d",
 	    h->xid, pn->fn, ufn, pn->pstb.mode, pn->flags);
+	(void)h;
 
 	if (pn->flags & RPC_PUTNAME_F_TRYDIR) {
 		struct stat stb;

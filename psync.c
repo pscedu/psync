@@ -1053,8 +1053,6 @@ getnprocessors(void)
 
 #elif defined(HW_LOGICALCPU)	/* MacOS X */
 	int mib[2];
-
-	int mib[2];
 	size_t size;
 
 	size = sizeof(np);

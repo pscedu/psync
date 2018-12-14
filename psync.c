@@ -140,7 +140,7 @@ psc_atomic64_t		 psync_offset_index = PSC_ATOMIC64_INIT(0);
 psc_atomic64_t		 psync_fid = PSC_ATOMIC64_INIT(0);	/* file ID (fake inumber) */
 psc_atomic64_t		 psync_nfiles_xfer = PSC_ATOMIC64_INIT(0);
 
-struct psc_compl	 psync_ready = PSC_COMPL_INIT;
+struct psc_compl	 psync_ready = PSC_COMPL_INIT("ready");
 
 unsigned char		 psync_authbuf[AUTH_LEN];
 
@@ -807,7 +807,7 @@ spawn_worker_threads(struct stream *st)
 
 	n = psc_dynarray_len(&streams);
 
-	thr = pscthr_init(THRT_WKR, wkrthr_main, NULL, sizeof(*wkrthr),
+	thr = pscthr_init(THRT_WKR, wkrthr_main, sizeof(*wkrthr),
 	    "wkrthr%d", n);
 	wkrthr = thr->pscthr_private;
 	wkrthr->st = st;
@@ -817,7 +817,7 @@ spawn_worker_threads(struct stream *st)
 	push(&wkrthrs, thr);
 	freelock(&wkrthrs_lock);
 
-	thr = pscthr_init(THRT_RCV, rcvthr_main, NULL, sizeof(*rcvthr),
+	thr = pscthr_init(THRT_RCV, rcvthr_main, sizeof(*rcvthr),
 	    "rcvthr%d", n);
 	rcvthr = thr->pscthr_private;
 	rcvthr->st = st;
@@ -941,7 +941,7 @@ dispthr_main(struct psc_thread *thr)
 	char totalbuf[PSCFMT_HUMAN_BUFSIZ], xferbuf[PSCFMT_HUMAN_BUFSIZ];
 	char *ce_seq = NULL, ratebuf[PSCFMT_HUMAN_BUFSIZ];
 	char ratbuf[PSCFMT_RATIO_BUFSIZ];
-	struct psc_waitq wq = PSC_WAITQ_INIT;
+	struct psc_waitq wq = PSC_WAITQ_INIT("display");
 	struct timespec ts, start, d;
 	uint64_t xnb, tnb;
 	time_t sec = 0;
@@ -1129,7 +1129,7 @@ main(int argc, char *argv[])
 	psync_umask = umask(0);
 	umask(psync_umask);
 
-	pscthr_init(THRT_MAIN, NULL, NULL, 0, "mainthr");
+	pscthr_init(THRT_MAIN, NULL, 0, "mainthr");
 
 	psc_poolmaster_init(&buf_poolmaster, struct buf, lentry,
 	    PPMF_AUTO, 16, 16, 0, NULL, NULL, NULL, "buf");
@@ -1164,8 +1164,7 @@ main(int argc, char *argv[])
 	if (sigaction(SIGPIPE, &sa, NULL) == -1)
 		psync_fatal("sigaction");
 
-	donethr = pscthr_init(THRT_DONE, donethr_main, NULL, 0,
-	    "donethr");
+	donethr = pscthr_init(THRT_DONE, donethr_main, 0, "donethr");
 
 	if (opts.head)
 		exit(puppet_head_mode());
@@ -1296,8 +1295,7 @@ main(int argc, char *argv[])
 	if (opts.verbose)
 		travflags |= PFL_FILEWALKF_VERBOSE;
 
-	dispthr = pscthr_init(THRT_DISP, dispthr_main, NULL, 0,
-	    "dispthr");
+	dispthr = pscthr_init(THRT_DISP, dispthr_main, 0, "dispthr");
 
 	rflags = 0;
 	if (argc == 1)

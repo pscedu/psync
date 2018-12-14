@@ -712,8 +712,8 @@ handle_signal(__unusedx int sig)
 }
 
 /*
- * Emit a warning contain a message which may container visibly "unsafe"
- * characters.
+ * Emit a warning containing a message which may contain visibly
+ * unsafe characters.
  */
 void
 psynclog_warnv(void *s, size_t len)
@@ -721,7 +721,7 @@ psynclog_warnv(void *s, size_t len)
 	char buf[LINE_MAX];
 
 	len = MIN(sizeof(buf), len * 4 + 1);
-	strnvis(buf, s, len, VIS_SAFE);
+	strnvis(buf, len, s, VIS_SAFE);
 	flockfile(stderr);
 	fprintf(stderr,
 	    "----------------------------------------------------\n"

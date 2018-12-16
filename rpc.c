@@ -721,7 +721,7 @@ psynclog_warnv(void *s, size_t len)
 	char buf[LINE_MAX];
 
 	len = MIN(sizeof(buf), len * 4 + 1);
-	strnvis(buf, len, s, VIS_SAFE);
+	pfl_strnvis(buf, s, len, VIS_SAFE);
 	flockfile(stderr);
 	fprintf(stderr,
 	    "----------------------------------------------------\n"

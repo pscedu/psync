@@ -1,4 +1,3 @@
-/* $Id$ */
 /*
  * %ISC_START_LICENSE%
  * ---------------------------------------------------------------------
@@ -162,7 +161,7 @@ filehandle_dropref(struct filehandle *fh)
 		psynclog_diag("close fd=%d", fh->fd);
 		close(fh->fd);
 		psc_hashent_remove(&filehandles_hashtbl, fh);
-		psc_assert(pfl_heap_nitems(&fh->done_heap) == 0);
+		pfl_assert(pfl_heap_nitems(&fh->done_heap) == 0);
 		psc_pool_return(filehandles_pool, fh);
 		rc = 1;
 	} else

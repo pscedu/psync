@@ -83,7 +83,7 @@ struct filehandle {
 	int			 refcnt;
 	uint64_t		 fid;
 	psc_spinlock_t		 lock;
-	struct psc_waitq	 wq;
+	struct pfl_waitq	 wq;
 	struct psc_compl	 cmpl;
 	size_t			 len;
 	struct pfl_heap		 done_heap;

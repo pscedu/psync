@@ -940,7 +940,7 @@ dispthr_main(struct psc_thread *thr)
 	char totalbuf[PSCFMT_HUMAN_BUFSIZ], xferbuf[PSCFMT_HUMAN_BUFSIZ];
 	char *ce_seq = NULL, ratebuf[PSCFMT_HUMAN_BUFSIZ];
 	char ratbuf[PSCFMT_RATIO_BUFSIZ];
-	struct psc_waitq wq = PSC_WAITQ_INIT("display");
+	struct pfl_waitq wq = PFL_WAITQ_INIT("display");
 	struct timespec ts, start, d;
 	uint64_t xnb, tnb;
 	time_t sec = 0;
@@ -960,7 +960,7 @@ dispthr_main(struct psc_thread *thr)
 			break;
 
 		ts.tv_sec++;
-		psc_waitq_waitabs(&wq, NULL, &ts);
+		pfl_waitq_waitabs(&wq, NULL, &ts);
 
 		if (!opts.progress)
 			continue;

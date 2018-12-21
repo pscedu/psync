@@ -1,7 +1,7 @@
 /*
  * %ISC_START_LICENSE%
  * ---------------------------------------------------------------------
- * Copyright 2015-2016, Google, Inc.
+ * Copyright 2014-2018, Google, LLC
  * Copyright (c) 2011-2015, Pittsburgh Supercomputing Center (PSC).
  * All rights reserved.
  *

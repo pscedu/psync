@@ -11,7 +11,7 @@ SRCS+=		psync.c
 SRCS+=		rpc.c
 SRCS+=		stream.c
 SRCS+=		util.c
-MODULES+=	pfl gcrypt curses
+MODULES+=	pfl gcrypt curses pthread
 DEFINES+=	-DPSYNC_VERSION=$$(git log | grep -c ^commit)
 
 include ${MAINMK}

@@ -40,6 +40,7 @@
 #include "pfl/alloc.h"
 #include "pfl/hashtbl.h"
 #include "pfl/str.h"
+#include "pfl/waitq.h"
 #include "pfl/walk.h"
 
 #include "psync.h"

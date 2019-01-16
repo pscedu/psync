@@ -447,7 +447,9 @@ userfn_subst(const char *fn)
 	    s++, t++)
 		*t = *s;
 	*t = '\0';
-	return (rcvthr->fnbuf);
+
+	t = rcvthr->fnbuf;
+	return (t);
 }
 
 void

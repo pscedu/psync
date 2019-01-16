@@ -149,6 +149,7 @@ stream_cmdopen(const char *fmt, ...)
 		close(wfd[0]);
 		return (stream_create(rfd[0], wfd[1]));
 	}
+	/* NOTREACHED */
 }
 
 struct stream *
